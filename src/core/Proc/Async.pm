@@ -42,10 +42,17 @@ my class Proc::Async {
     my class ProcessCancellation is repr('AsyncTask') { }
     my enum  CharsOrBytes ( :Bytes(0), :Chars(1) );
 
+    my enum ProcStatus (
+        :Initialized(0),
+        :Starting(1),
+        :Started(2),
+        :Finished(3),
+    );
+
     has $.path;
     has @.args;
     has $.w;
-    has Bool $.started = False;
+    has ProcStatus $.status = Initialized;
     has $!stdout_supply;
     has CharsOrBytes $!stdout_type;
     has $!stderr_supply;
@@ -62,7 +69,7 @@ my class Proc::Async {
 
     method !supply(\what,\the-supply,\type,\value) {
         X::Proc::Async::TapBeforeSpawn.new(handle => what, proc => self).throw
-          if $!started;
+          if $!status >= Started;
         X::Proc::Async::CharsOrBytes.new(handle => what, proc => self).throw
           if the-supply and type != value;
 
@@ -162,9 +169,13 @@ my class Proc::Async {
         $promise;
     }
 
+    method started {
+        $!status >= Started
+    }
+
     method start(Proc::Async:D: :$scheduler = $*SCHEDULER, :$ENV, :$cwd = $*CWD) {
-        X::Proc::Async::AlreadyStarted.new(proc => self).throw if $!started;
-        $!started = True;
+        X::Proc::Async::AlreadyStarted.new(proc => self).throw if $!status >= Started;
+        $!status = Started;
 
         my %ENV := $ENV ?? $ENV.hash !! %*ENV;
 
@@ -208,7 +219,7 @@ my class Proc::Async {
 
     method print(Proc::Async:D: Str() $str, :$scheduler = $*SCHEDULER) {
         X::Proc::Async::OpenForWriting.new(:method<print>, proc => self).throw if !$!w;
-        X::Proc::Async::MustBeStarted.new(:method<print>, proc => self).throw  if !$!started;
+        X::Proc::Async::MustBeStarted.new(:method<print>, proc => self).throw  if $!status < Started;
 
         my $p = Promise.new;
         my $v = $p.vow;
@@ -229,14 +240,14 @@ my class Proc::Async {
 
     method say(Proc::Async:D: \x, |c) {
         X::Proc::Async::OpenForWriting.new(:method<say>, proc => self).throw if !$!w;
-        X::Proc::Async::MustBeStarted.new(:method<say>, proc => self).throw  if !$!started;
+        X::Proc::Async::MustBeStarted.new(:method<say>, proc => self).throw  if $!status < Started;
 
         self.print( x.gist ~ "\n", |c );
     }
 
     method write(Proc::Async:D: Blob:D $b, :$scheduler = $*SCHEDULER) {
         X::Proc::Async::OpenForWriting.new(:method<write>, proc => self).throw if !$!w;
-        X::Proc::Async::MustBeStarted.new(:method<write>, proc => self).throw  if !$!started;
+        X::Proc::Async::MustBeStarted.new(:method<write>, proc => self).throw  if $!status < Started;
 
         my $p = Promise.new;
         my $v = $p.vow;
@@ -263,14 +274,14 @@ my class Proc::Async {
         X::Proc::Async::OpenForWriting.new(:method<close-stdin>, proc => self).throw
           if !$!w;
         X::Proc::Async::MustBeStarted.new(:method<close-stdin>, proc => self).throw
-          if !$!started;
+          if $!status < Started;
 
         nqp::closefh($!process_handle);
         True;
     }
 
     method kill(Proc::Async:D: $signal = "HUP") {
-        X::Proc::Async::MustBeStarted.new(:method<kill>, proc => self).throw if !$!started;
+        X::Proc::Async::MustBeStarted.new(:method<kill>, proc => self).throw if $!status < Started;
         nqp::killprocasync($!process_handle, $*KERNEL.signal($signal));
     }
 }
