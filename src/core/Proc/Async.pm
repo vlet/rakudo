@@ -58,6 +58,7 @@ my class Proc::Async {
     has $!stderr_supply;
     has CharsOrBytes $!stderr_type;
     has $!process_handle;
+    has $!ready-promise;
     has $!exit_promise;
     has @!promises;
 
@@ -173,15 +174,20 @@ my class Proc::Async {
         $!status >= Started
     }
 
-    method start(Proc::Async:D: :$scheduler = $*SCHEDULER, :$ENV, :$cwd = $*CWD) {
+    method ready(Proc::Async:D: :$scheduler = $*SCHEDULER, :$ENV, :$cwd = $*CWD) {
         X::Proc::Async::AlreadyStarted.new(proc => self).throw if $!status >= Started;
-        $!status = Started;
+        $!status = Starting;
 
         my %ENV := $ENV ?? $ENV.hash !! %*ENV;
 
-        $!exit_promise = Promise.new;
+        $!ready-promise = Promise.new;
+        $!exit_promise  = Promise.new;
 
         my Mu $callbacks := nqp::hash();
+        nqp::bindkey($callbacks, 'ready', -> {
+            $!status = Started;
+            $!ready-promise.keep;
+        });
         nqp::bindkey($callbacks, 'done', -> Mu \status {
             $!exit_promise.keep(Proc.new(:exitcode(status +> 8), :signal(status +& 0xFF)))
         });
@@ -206,6 +212,10 @@ my class Proc::Async {
             $callbacks,
         );
 
+        $!ready-promise
+    }
+
+    method finish() {
         Promise.allof( $!exit_promise, @!promises ).then( {
             for @!promises -> $promise {
                 given $promise.result {
@@ -215,6 +225,12 @@ my class Proc::Async {
             }
             $!exit_promise.result;
         } );
+    }
+
+    method start(|c) {
+        DEPRECATED('started');
+        await self.ready(|c);
+        self.finish
     }
 
     method print(Proc::Async:D: Str() $str, :$scheduler = $*SCHEDULER) {
