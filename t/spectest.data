@@ -336,6 +336,7 @@ S04-statements/when.t
 S04-statements/while.t
 S04-statements/with.t
 S05-capture/alias.t
+S05-capture/array-alias.t
 S05-capture/caps.t
 S05-capture/dot.t
 S05-capture/match-object.t
@@ -505,6 +506,7 @@ S06-traits/misc.t
 S06-traits/native-is-copy.t
 S06-traits/native-is-rw.t
 S06-traits/precedence.t
+S07-slip/slip.t
 S06-traits/slurpy-is-rw.t
 S09-autovivification/autoincrement.t
 S09-autovivification/autovivification.t

@@ -496,19 +496,32 @@ my class Array { # declared in BOOTSTRAP
         $value;
     }
 
-    # Note, do not add a variant for a single value unless you also handle Slip right.
-    # SEQ depends on being able to @tail.push(value) and let the sequence op iterator
-    # slip in multiple values.
+    # MUST have a separate Slip variant to have it slip
+    multi method push(Array:D: Slip \value) {
+        self!ensure-allocated();
+        fail X::Cannot::Lazy.new(action => 'push to') if self.is-lazy;
+        self!append-list(value);
+    }
+    multi method push(Array:D: \value) {
+        self!ensure-allocated();
+        fail X::Cannot::Lazy.new(action => 'push to') if self.is-lazy;
+
+        nqp::push(
+          nqp::getattr(self, List, '$!reified'),
+          nqp::assign(nqp::p6scalarfromdesc($!descriptor), value)
+        );
+        self
+    }
     multi method push(Array:D: **@values is raw) {
         self!ensure-allocated();
+        fail X::Cannot::Lazy.new(action => 'push to') if self.is-lazy;
         self!append-list(@values)
     }
 
     multi method append(Array:D: \value) {
         self!ensure-allocated();
+        fail X::Cannot::Lazy.new(action => 'append to') if self.is-lazy;
         if nqp::iscont(value) || nqp::not_i(nqp::istype(value, Iterable)) {
-            fail X::Cannot::Lazy.new(action => 'push to') if self.is-lazy;
-
             nqp::push(
                 nqp::getattr(self, List, '$!reified'),
                 nqp::assign(nqp::p6scalarfromdesc($!descriptor), value)
@@ -521,11 +534,10 @@ my class Array { # declared in BOOTSTRAP
     }
     multi method append(Array:D: **@values is raw) {
         self!ensure-allocated();
+        fail X::Cannot::Lazy.new(action => 'append to') if self.is-lazy;
         self!append-list(@values)
     }
     method !append-list(@values) {
-        fail X::Cannot::Lazy.new(action => 'push to') if self.is-lazy;
-
         my \values-iter = @values.iterator;
         my \reified := nqp::getattr(self, List, '$!reified');
         my \target := ArrayReificationTarget.new(reified,
@@ -536,11 +548,22 @@ my class Array { # declared in BOOTSTRAP
         self
     }
 
+    multi method unshift(Array:D: Slip \value) {
+        self!ensure-allocated();
+        self!prepend-list(value)
+    }
+    multi method unshift(Array:D: \value) {
+        self!ensure-allocated();
+        nqp::unshift(
+            nqp::getattr(self, List, '$!reified'),
+            nqp::assign(nqp::p6scalarfromdesc($!descriptor), value)
+        );
+        self
+    }
     multi method unshift(Array:D: **@values is raw) {
         self!ensure-allocated();
         self!prepend-list(@values)
     }
-
     multi method prepend(Array:D: \value) {
         if nqp::iscont(value) || nqp::not_i(nqp::istype(value, Iterable)) {
             self!ensure-allocated();
