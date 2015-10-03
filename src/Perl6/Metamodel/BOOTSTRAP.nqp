@@ -2712,7 +2712,7 @@ BEGIN {
     # class Bool is Int {
     #     has str $!key;
     #     has int $!value;
-    Bool.HOW.set_base_type(Bool, Int);
+    Bool.HOW.add_parent(Bool, Int);
     Bool.HOW.add_attribute(Bool, BOOTSTRAPATTR.new(:name<$!key>, :type(str), :package(Bool)));
     Bool.HOW.add_attribute(Bool, BOOTSTRAPATTR.new(:name<$!value>, :type(int), :package(Bool)));
     Bool.HOW.set_boolification_mode(Bool, 1);

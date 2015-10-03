@@ -10,10 +10,12 @@ class Perl6::Metamodel::EnumHOW
     does Perl6::Metamodel::MethodContainer
     does Perl6::Metamodel::MultiMethodContainer
     does Perl6::Metamodel::RoleContainer
-    does Perl6::Metamodel::BaseType
+    does Perl6::Metamodel::MultipleInheritance
+    does Perl6::Metamodel::C3MRO
     does Perl6::Metamodel::MROBasedMethodDispatch
     does Perl6::Metamodel::MROBasedTypeChecking
     does Perl6::Metamodel::BUILDPLAN
+    does Perl6::Metamodel::Mixins
     does Perl6::Metamodel::BoolificationProtocol
     does Perl6::Metamodel::REPRComposeProtocol
     does Perl6::Metamodel::InvocationProtocol
@@ -50,11 +52,12 @@ class Perl6::Metamodel::EnumHOW
         nqp::findmethod(NQPMu, 'BUILDALL')(nqp::create(self), |%named)
     }
     
-    method new_type(:$name!, :$base_type?) {
+    method new_type(:$name!, :$repr = 'P6opaque', :$base_type?) {
         my $meta := self.new();
-        my $obj  := nqp::settypehll(nqp::newtype($meta, 'P6opaque'), 'perl6');
+        my $obj  := nqp::settypehll(nqp::newtype($meta, $repr), 'perl6');
         $meta.set_name($obj, $name);
-        $meta.set_base_type($meta, $base_type) unless $base_type =:= NQPMu;
+        $meta.add_parent($meta, $base_type) unless $base_type =:= NQPMu;
+        $meta.setup_mixin_cache($obj);
         self.add_stash($obj);
     }
     
