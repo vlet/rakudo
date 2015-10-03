@@ -84,6 +84,8 @@ augment class Any {
         # We want map to be fast, so we go to some effort to build special
         # case iterators that can ignore various interesting cases.
         my $count = &block.count;
+
+        # "loop" taking 0 or 1 parameter
         if $count == 1 || $count == 0 || $count === Inf {
             Seq.new(class :: does MapIterCommon {
                 has $!did-init;
@@ -141,9 +143,13 @@ augment class Any {
                                ($value := $!source.pull-one()),
                                nqp::eqaddr($value, IterationEnd)
                                  ?? ($result := IterationEnd)
-                                 !! ($redo = 1)),
-                             'REDO', $redo = 1,
-                             'LAST', nqp::stmts(($!did-iterate = 1), ($result := IterationEnd))
+                                 !! ($redo = 1)
+                            ),
+                            'REDO', $redo = 1,
+                            'LAST', nqp::stmts(
+                              ($!did-iterate = 1),
+                              ($result := IterationEnd)
+                            )
                           )
                         ),
                       :nohandler);
@@ -190,7 +196,10 @@ augment class Any {
                                       ?? ($result := IterationEnd)
                                       !! ($redo = 1)),
                                   'REDO', $redo = 1,
-                                  'LAST', nqp::stmts(($!did-iterate = 1), ($result := IterationEnd))
+                                  'LAST', nqp::stmts(
+                                    ($!did-iterate = 1),
+                                    ($result := IterationEnd)
+                                  )
                                 )
                               ),
                             :nohandler);
@@ -204,6 +213,8 @@ augment class Any {
                 }
             }.new(&block, source, 1, $label));
         }
+
+        # loop/map taking more than 1 param
         else {
             Seq.new(class :: does MapIterCommon {
                 has $!value-buffer;
@@ -271,7 +282,10 @@ augment class Any {
                                     ?? ($result := IterationEnd)
                                     !! ($redo = 1)),
                               'REDO', $redo = 1,
-                              'LAST', nqp::stmts(($!did-iterate = 1), ($result := IterationEnd))
+                              'LAST', nqp::stmts(
+                                ($!did-iterate = 1),
+                                ($result := IterationEnd)
+                              )
                             )
                           ),
                         :nohandler);
