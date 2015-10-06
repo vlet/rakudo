@@ -539,7 +539,7 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
         :dba('whitespace')
         <!ww>
         [
-        | \v <.heredoc>
+        | [\r\n || \v] <.heredoc>
         | <.unv>
         | <.unsp>
         | $ <?MOREINPUT>
@@ -2319,7 +2319,6 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
         ]
     }
 
-    rule term:sym<winner>   { <sym><.end_keyword> <xblock> }   # DEPRECATED
     rule term:sym<earliest> { <sym><.end_keyword> <xblock> }
     rule term:sym<combine>{ <sym><.end_keyword> <xblock> }
     rule statement_control:sym<more>   { <sym><.kok> <xblock(1)> }
@@ -2498,7 +2497,7 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
                 # need to tweak into the grammar.
                 my $category := $<deflongname><name>.Str;
                 my $opname := $cf<circumfix>
-                    ?? $*W.colonpair_nibble_to_str($/, $cf<circumfix><nibble>)
+                    ?? $*W.colonpair_nibble_to_str($/, $cf<circumfix><nibble> // $cf<circumfix><semilist>)
                     !! '';
                 my $canname := $category ~ ":sym<" ~ $opname ~ ">";
                 $/.CURSOR.add_categorical($category, $opname, $canname, $<deflongname>.ast, $*DECLARAND);
@@ -4373,7 +4372,9 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
     method add_variable($name) {
         my $categorical := $name ~~ /^'&'((\w+)':<'\s*(\S+?)\s*'>')$/;
         if $categorical {
-            self.add_categorical(~$categorical[0][0], ~$categorical[0][1], ~$categorical[0], ~$categorical[0]);
+            self.add_categorical(~$categorical[0][0], ~$categorical[0][1],
+                ~$categorical[0][0] ~ ':sym<' ~ ~$categorical[0][1] ~ '>',
+                ~$categorical[0]);
         }
     }
 

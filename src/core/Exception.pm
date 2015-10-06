@@ -272,7 +272,7 @@ do {
                 nqp::printfh($err, $e.Str);
                 nqp::printfh($err, "\n");
             }
-            THE_END();
+            Rakudo::Internals::THE_END();
             CONTROL { when CX::Warn { .resume } }
         }
         if $! {
@@ -1418,6 +1418,13 @@ my class X::Syntax::Extension::Null does X::Syntax {
     }
 }
 
+my class X::Syntax::Extension::TooComplex does X::Syntax {
+    has $.name;
+    method message() {
+        "Colon pair value '$.name' too complex to use in name";
+    }
+}
+
 my class X::Syntax::Extension::SpecialForm does X::Syntax {
     has $.category;
     has $.opname;
@@ -1695,7 +1702,7 @@ my class X::TypeCheck::Assignment is X::TypeCheck {
     method operation { 'assignment' }
     method message {
         self.priors() ~
-        $.symbol.defined
+        $.symbol.defined && $.symbol ne '$'
             ?? "Type check failed in assignment to $.symbol; expected $.expectedn but got $.gotn"
             !! "Type check failed in assignment; expected $.expectedn but got $.gotn";
     }
@@ -2002,6 +2009,18 @@ my class X::Inheritance::NotComposed does X::MOP {
     }
 }
 
+my class X::PhaserExceptions is Exception {
+    has @.exceptions;
+    method message() {
+        "Multiple exceptions were thrown by LEAVE/POST phasers"
+    }
+    method gist(X::PhaserExceptions:D:) {
+        join "\n", flat
+            "Multiple exceptions were thrown by LEAVE/POST phasers\n",
+            @!exceptions>>.gist>>.indent(4)
+    }
+}
+
 {
     my %c_ex;
     %c_ex{'X::TypeCheck::Binding'} := sub (Mu $got, Mu $expected, $symbol?) {
@@ -2039,6 +2058,10 @@ my class X::Inheritance::NotComposed does X::MOP {
     }
     %c_ex{'X::Parameter::RW'} := sub (Mu $got, $symbol) {
             X::Parameter::RW.new(:$got, :$symbol).throw;
+        };
+    %c_ex{'X::PhaserExceptions'} := sub (@exceptions) {
+            X::PhaserExceptions.new(exceptions =>
+                @exceptions.map(-> Mu \e { EXCEPTION(e) })).throw;
         };
     nqp::bindcurhllsym('P6EX', nqp::getattr(%c_ex, Map, '$!storage'));
 

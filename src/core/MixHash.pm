@@ -1,11 +1,15 @@
 my class MixHash does Mixy {
 
-    method Mix (:$view) {
+    method BUILD(%!elems) { self }
+
+    method Mix(:$view) {
         if $view {
-            Mix.bless(:elems(%!elems));
+            my \mix = nqp::create(Mix);
+            nqp::bindattr(mix,Mix,'%!elems',%!elems);
+            mix
         }
         else {
-            Mix.new-from-pairs(%!elems.values);
+            Mix.new-from-pairs(%!elems.values)
         }
     }
     method MixHash { self }
@@ -20,7 +24,8 @@ my class MixHash does Mixy {
           },
           STORE => -> $, $value is copy {
               if $value != 0 {
-                  (%!elems.AT-KEY(k.WHICH) //= ((k) => my $ = 0)).value = $value;
+                  (%!elems.AT-KEY(k.WHICH) //=
+                    ((k) => my Real $ = 0)).value = $value;
               }
               else {
                   %!elems.DELETE-KEY(k.WHICH);

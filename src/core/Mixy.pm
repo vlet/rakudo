@@ -1,22 +1,14 @@
 my role Mixy does Baggy  {
+
+    method PAIR(\key) { Pair.new(key, my Real $ = 0 ) }
+    method SANITY(%elems --> Nil) {
+        for %elems -> $p {
+            %elems.DELETE-KEY($p.key) if $p.value.value == 0;
+        }
+    }
+
     method default(--> Real) { 0 }
     method total(--> Real) { [+] self.values }
-
-    method new-from-pairs(*@pairs --> Mixy) {
-        my %e;
-        for @pairs {
-            when Pair {
-                (%e.AT-KEY($_.key.WHICH) //= ($_.key => my $ = 0)).value += $_.value;
-            }
-            default {
-                (%e.AT-KEY($_.WHICH) //= ($_ => my $ = 0)).value++;
-            }
-        }
-        for %e -> $p {
-            %e.DELETE-KEY($p.key) if $p.value.value == 0;
-        }
-        self.bless(:elems(%e));
-    }
 
     multi method gist(Mixy:D $ : --> Str) {
         my $name := self.^name;

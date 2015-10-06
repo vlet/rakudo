@@ -1221,14 +1221,14 @@ class Perl6::World is HLL::World {
     # attribute/lexpad), bind constraint (what could we bind to this
     # slot later), and if specified a constraint on the inner value
     # and a default value.
-    method container_type_info($/, $sigil, @value_type, $shape?, :@post) {
+    method container_type_info($/, $sigil, @value_type, $shape?, :@post, :$subset_name, :$default_value) {
         my %info;
         %info<sigil> := $sigil;
         @value_type[0] := nqp::decont(@value_type[0]) if @value_type;
         for @post -> $con {
             @value_type[0] := self.create_subset(self.resolve_mo($/, 'subset'),
                 @value_type ?? @value_type[0] !! self.find_symbol(['Mu']),
-                $con);
+                $con,  :name($subset_name));
         }
         if $sigil eq '@' {
             %info<bind_constraint> := self.find_symbol(['Positional']);
@@ -1319,7 +1319,7 @@ class Perl6::World is HLL::World {
             if @value_type {
                 %info<bind_constraint> := @value_type[0];
                 %info<value_type>      := @value_type[0];
-                %info<default_value>   := @value_type[0];
+                %info<default_value>   := $default_value // @value_type[0];
             }
             else {
                 %info<bind_constraint> := self.find_symbol(['Mu']);
@@ -2362,7 +2362,18 @@ class Perl6::World is HLL::World {
                         nqp::push(@pieces, nqp::unbox_s($_.compile_time_value));
                     }
                     else {
-                        $/.CURSOR.panic($mkerr());
+                        if nqp::istype($_, QAST::Var) {
+                            my $result;
+                            {
+                                $result := self.compile_time_evaluate($/, $_);
+                                CATCH {
+                                    $/.CURSOR.panic($mkerr());
+                                }
+                            }
+                            nqp::push(@pieces, nqp::unbox_s($result));
+                        } else {
+                            $/.CURSOR.panic($mkerr());
+                        }
                     }
                 }
                 return join(' ', @pieces);
@@ -2371,7 +2382,18 @@ class Perl6::World is HLL::World {
                 # anyway) and focus on what's inside the val (which could be a
                 # single thing or a list of things, as done above)
                 self.nibble_to_str($/, $ast[0], $mkerr);
+            } else {
+                $/.CURSOR.panic($mkerr());
             }
+        } elsif nqp::istype($ast, QAST::Var) {
+            my $result;
+            {
+                $result := self.compile_time_evaluate($/, $ast);
+                CATCH {
+                    $/.CURSOR.panic($mkerr());
+                }
+            }
+            return nqp::unbox_s($result);
         } else {
             $/.CURSOR.panic($mkerr());
         }
@@ -2379,7 +2401,11 @@ class Perl6::World is HLL::World {
 
     method colonpair_nibble_to_str($/, $nibble) {
         self.nibble_to_str($/, $nibble.ast,
-            -> { "Colon pair value '$nibble' too complex to use in name" });
+            -> {
+                self.throw($/, ['X', 'Syntax', 'Extension', 'TooComplex'],
+                  name       => ~$nibble,
+                );
+            });
     }
 
     # Takes a declarator name and locates the applicable meta-object for it.

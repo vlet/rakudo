@@ -1,48 +1,175 @@
 my role Baggy does QuantHash {
     has %!elems; # key.WHICH => (key,value)
 
-    submethod BUILD (:%!elems) { }
+    method PAIR(\key) { Pair.new(key, my Int $ = 0 ) }
+    method SANITY(%elems --> Nil) {
+        my @toolow;
+        for %elems -> $p {
+            my $pair  := $p.value;
+            my $value := $pair.value;
+            @toolow.push( $pair.key ) if $value <  0;
+            %elems.DELETE-KEY($p.key) if $value <= 0;
+        }
+        fail "Found negative values for {@toolow} in {self.^name}" if @toolow;
+    }
+    multi method new(Baggy: +@args) {
+        my %elems;
+        for @args {
+            (%elems{.WHICH} //= self.PAIR($_)).value++
+        } 
+        nqp::create(self).BUILD(%elems)
+    }
+    method new-from-pairs(*@pairs) {
+        my %elems;
+        for @pairs {
+            when Pair {
+                (%elems.AT-KEY(.key.WHICH) //= self.PAIR(.key)).value += .value;
+            }
+            default {
+                (%elems.AT-KEY(.WHICH) //= self.PAIR($_)).value++;
+            }
+        }
+        self.SANITY(%elems);
+        nqp::create(self).BUILD(%elems)
+    }
+
     method default(--> Int) { 0 }
 
-    multi method keys(Baggy:D:)     { %!elems.values.map( {.key} ) }
-    multi method kv(Baggy:D:)       { %!elems.values.map( {.key, .value} ) }
-    multi method values(Baggy:D:)   { %!elems.values.map( {.value} ) }
-    multi method pairs(Baggy:D:)    { %!elems.values.map: { (.key => .value) } }
-    multi method antipairs(Baggy:D:) { %!elems.values.map: { (.value => .key) } }
-    multi method invert(Baggy:D:)   { %!elems.values.map: { (.value => .key) } } # NB value can't be listy
+    multi method pairs(Baggy:D:) {
+        Seq.new(class :: does Rakudo::Internals::MapIterator {
+            method pull-one() {
+                $!hash-iter
+                  ?? nqp::iterval(nqp::shift($!hash-iter))
+                  !! IterationEnd
+            }
+            method push-all($target) {
+                $target.push(nqp::iterval(nqp::shift($!hash-iter)))
+                  while $!hash-iter;
+                IterationEnd
+            }
+        }.new(%!elems))
+    }
+    multi method keys(Baggy:D:) {
+        Seq.new(class :: does Rakudo::Internals::MapIterator {
+            method pull-one() {
+                $!hash-iter
+                  ?? nqp::iterval(nqp::shift($!hash-iter)).key
+                  !! IterationEnd
+            }
+            method push-all($target) {
+                $target.push(nqp::iterval(nqp::shift($!hash-iter)).key)
+                  while $!hash-iter;
+                IterationEnd
+            }
+        }.new(%!elems))
+    }
+    multi method kv(Baggy:D:) {
+        Seq.new(class :: does Rakudo::Internals::MapIterator {
+            has Mu $!value;
 
-    method kxxv(Baggy:D:) { %!elems.values.map( {.key xx .value} ) }
+            method pull-one() is raw {
+                if $!value.DEFINITE {
+                    my \tmp  = $!value;
+                    $!value := Mu;
+                    tmp
+                }
+                elsif $!hash-iter {
+                    my \tmp =
+                      nqp::decont(nqp::iterval(nqp::shift($!hash-iter)));
+                    $!value := nqp::getattr(tmp,Pair,'$!value');
+                    nqp::getattr(tmp,Pair,'$!key')
+                }
+                else {
+                    IterationEnd
+                }
+            }
+            method push-all($target) {
+                while $!hash-iter {
+                    my \tmp =
+                      nqp::decont(nqp::iterval(nqp::shift($!hash-iter)));
+                    $target.push(nqp::getattr(tmp,Pair,'$!key'));
+                    $target.push(nqp::getattr(tmp,Pair,'$!value'));
+                }
+                IterationEnd
+            }
+        }.new(%!elems))
+    }
+    multi method values(Baggy:D:) {
+        Seq.new(class :: does Rakudo::Internals::MapIterator {
+            method pull-one() is raw {
+                $!hash-iter
+                    ?? nqp::getattr(nqp::decont(
+                         nqp::iterval(nqp::shift($!hash-iter))),Pair,'$!value')
+                    !! IterationEnd
+            }
+            method push-all($target) {
+                $target.push(nqp::getattr(nqp::decont(
+                  nqp::iterval(nqp::shift($!hash-iter))),Pair,'$!value'
+                )) while $!hash-iter;
+                IterationEnd
+            }
+        }.new(%!elems))
+    }
+    multi method antipairs(Baggy:D:) {
+        Seq.new(class :: does Rakudo::Internals::MapIterator {
+            method pull-one() {
+                if $!hash-iter {
+                    my \tmp = nqp::iterval(nqp::shift($!hash-iter));
+                    Pair.new(tmp.value, tmp.key)
+                }
+                else {
+                    IterationEnd
+                }
+            }
+            method push-all($target) {
+                while $!hash-iter {
+                    my \tmp = nqp::iterval(nqp::shift($!hash-iter));
+                    $target.push(Pair.new(tmp.value, tmp.key));
+                }
+                IterationEnd
+            }
+        }.new(%!elems))
+    }
+    method kxxv(Baggy:D:) {
+        Seq.new(class :: does Rakudo::Internals::MapIterator {
+            has Mu $!key;
+            has int $!times;
+
+            method pull-one() is raw {
+                if $!times {
+                    $!times = $!times - 1;
+                    $!key
+                }
+                elsif $!hash-iter {
+                    my \tmp = nqp::iterval(nqp::shift($!hash-iter));
+                    $!key  := tmp.key;
+                    $!times = tmp.value - 1;
+                    $!key
+                }
+                else {
+                    IterationEnd
+                }
+            }
+            method push-all($target) {
+                while $!hash-iter {
+                    my \tmp = nqp::iterval(nqp::shift($!hash-iter));
+                    $!key  := tmp.key;
+                    $!times = tmp.value + 1;
+                    $target.push($!key) while $!times = $!times - 1;
+                }
+                IterationEnd
+            }
+        }.new(%!elems))
+    }
+
+    multi method invert(Baggy:D:) {
+        %!elems.values.map: { (.value »=>» .key).cache.Slip }
+    }
     method elems(Baggy:D: --> Int) { %!elems.elems }
     method total(--> Int) { [+] self.values }
     method Bool(Baggy:D:) { %!elems.Bool }
 
     method hash(Baggy:D: --> Hash) { %!elems.values.hash }
-
-    multi method new(Baggy: +@args) {
-        my %e;
-        # need explicit signature because of #119609
-        -> $_ { (%e{$_.WHICH} //= ($_ => my $ = 0)).value++ } for @args;
-        self.bless(:elems(%e));
-    }
-    method new-from-pairs(*@pairs) {
-        my %e;
-        for @pairs {
-            when Pair {
-                (%e.AT-KEY($_.key.WHICH) //= ($_.key => my $ = 0)).value += $_.value.Int;
-            }
-            default {
-                (%e.AT-KEY($_.WHICH) //= ($_ => my $ = 0)).value++;
-            }
-        }
-        my @toolow;
-        for %e -> $p {
-            my $pair := $p.value;
-            @toolow.push( $pair.key ) if $pair.value <  0;
-            %e.DELETE-KEY($p.key)     if $pair.value <= 0;
-        }
-        fail "Found negative values for {@toolow} in {self.^name}" if @toolow;
-        self.bless(:elems(%e));
-    }
 
     method ACCEPTS($other) {
         self.defined

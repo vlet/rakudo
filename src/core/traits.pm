@@ -9,38 +9,6 @@ my class X::Inheritance::SelfInherit { ... }
 my class X::Comp::Trait::Unknown { ... }
 my class Pod::Block::Declarator { ... }
 
-sub SET_LEADING_DOCS($obj, $docs) {
-    my $current_why := $obj.WHY;
-
-    if $current_why {
-        my $end := nqp::elems($*POD_BLOCKS) - 1;
-        my $i   := $end;
-
-        while $i >= 0 {
-            if $docs === nqp::atpos($*POD_BLOCKS, $i) {
-                nqp::splice($*POD_BLOCKS, nqp::list(), $i, 1);
-                last;
-            }
-            $i := $i - 1;
-        }
-
-        $current_why._add_leading(~$docs);
-    } else {
-        $obj.set_why($docs);
-    }
-}
-
-sub SET_TRAILING_DOCS($obj, $docs) {
-    my $current_why := $obj.WHY;
-
-    if $current_why {
-        $current_why._add_trailing(~$docs);
-    } else {
-        $obj.set_why($docs);
-        $*POD_BLOCKS.push($docs);
-    }
-}
-
 proto sub trait_mod:<is>(|) { * }
 multi sub trait_mod:<is>(Mu:U $child, Mu:U $parent) {
     if $parent.HOW.archetypes.inheritable() {
@@ -125,11 +93,11 @@ multi sub trait_mod:<is>(Attribute:D $attr, :$DEPRECATED!) {
 # to the (possibly auto-generated) accessor method.
 }
 multi sub trait_mod:<is>(Attribute:D $attr, :$leading_docs!) {
-    SET_LEADING_DOCS($attr, $leading_docs);
+    Rakudo::Internals::SET_LEADING_DOCS($attr, $leading_docs);
 }
 
 multi sub trait_mod:<is>(Attribute:D $attr, :$trailing_docs!) {
-    SET_TRAILING_DOCS($attr, $trailing_docs);
+    Rakudo::Internals::SET_TRAILING_DOCS($attr, $trailing_docs);
 }
 
 multi sub trait_mod:<is>(Routine:D $r, |c ) {
@@ -240,10 +208,10 @@ multi sub trait_mod:<is>(Parameter:D $param, :$onearg!) {
     $param.set_onearg();
 }
 multi sub trait_mod:<is>(Parameter:D $param, :$leading_docs!) {
-    SET_LEADING_DOCS($param, $leading_docs);
+    Rakudo::Internals::SET_LEADING_DOCS($param, $leading_docs);
 }
 multi sub trait_mod:<is>(Parameter:D $param, :$trailing_docs!) {
-    SET_TRAILING_DOCS($param, $trailing_docs);
+    Rakudo::Internals::SET_TRAILING_DOCS($param, $trailing_docs);
 }
 
 # Declare these, as setting mainline doesn't get them automatically (as the
@@ -252,54 +220,25 @@ my $!;
 my $/;
 my $_;
 
-sub EXPORT_SYMBOL(\exp_name, @tags, Mu \sym) {
-    my @export_packages = $*EXPORT;
-    for flat nqp::hllize(@*PACKAGES) {
-        unless .WHO.EXISTS-KEY('EXPORT') {
-            .WHO<EXPORT> := Metamodel::PackageHOW.new_type(:name('EXPORT'));
-            .WHO<EXPORT>.^compose;
-        }
-        @export_packages.append: .WHO<EXPORT>;
-    }
-    for @export_packages -> $p {
-        for @tags -> $tag {
-            my $install_in;
-            if $p.WHO.EXISTS-KEY($tag) {
-                $install_in := $p.WHO.{$tag};
-            }
-            else {
-                $install_in := Metamodel::PackageHOW.new_type(:name($tag));
-                $install_in.^compose;
-                $p.WHO{$tag} := $install_in;
-            }
-            if $install_in.WHO.EXISTS-KEY(exp_name) {
-                unless ($install_in.WHO){exp_name} =:= sym {
-                    X::Export::NameClash.new(symbol => exp_name).throw;
-                }
-            }
-            $install_in.WHO{exp_name} := sym;
-        }
-    }
-    0;
-}
 multi sub trait_mod:<is>(Routine:D \r, :$export!) {
     my $to_export := r.multi ?? r.dispatcher !! r;
     my $exp_name  := '&' ~ r.name;
     my @tags = flat 'ALL', (nqp::istype($export,Pair) ?? $export.key() !!
                             nqp::istype($export,Positional) ?? @($export)>>.key !!
                             'DEFAULT');
-    EXPORT_SYMBOL($exp_name, @tags, $to_export);
+    Rakudo::Internals::EXPORT_SYMBOL($exp_name, @tags, $to_export);
 }
 multi sub trait_mod:<is>(Mu:U \type, :$export!) {
     my $exp_name := type.^name;
     my @tags = flat 'ALL', (nqp::istype($export,Pair) ?? $export.key !!
                             nqp::istype($export,Positional) ?? @($export)>>.key !!
                             'DEFAULT');
-    EXPORT_SYMBOL($exp_name, @tags, type);
+    Rakudo::Internals::EXPORT_SYMBOL($exp_name, @tags, type);
     if nqp::istype(type.HOW, Metamodel::EnumHOW) {
         type.^set_export_callback( {
             for type.^enum_values.keys -> $value_name {
-                EXPORT_SYMBOL($value_name, @tags, type.WHO{$value_name});
+                Rakudo::Internals::EXPORT_SYMBOL(
+                  $value_name, @tags, type.WHO{$value_name});
             }
         });
     }
@@ -309,31 +248,31 @@ multi sub trait_mod:<is>(Mu \sym, :$export!, :$SYMBOL!) {
     my @tags = flat 'ALL', (nqp::istype($export,Pair) ?? $export.key !!
                             nqp::istype($export,Positional) ?? @($export)>>.key !!
                             'DEFAULT');
-    EXPORT_SYMBOL($SYMBOL, @tags, sym);
+    Rakudo::Internals::EXPORT_SYMBOL($SYMBOL, @tags, sym);
 }
 
 multi sub trait_mod:<is>(Block:D $r, :$leading_docs!) {
-    SET_LEADING_DOCS($r, $leading_docs);
+    Rakudo::Internals::SET_LEADING_DOCS($r, $leading_docs);
 }
 multi sub trait_mod:<is>(Block:D $r, :$trailing_docs!) {
-    SET_TRAILING_DOCS($r, $trailing_docs);
+    Rakudo::Internals::SET_TRAILING_DOCS($r, $trailing_docs);
 }
 
 # this should be identical to Mu:D, :leading_docs, otherwise the fallback Block:D, |c
 # will catch it and declare "leading_docs" to be an unknown trait.  This is why
 # we need this redundant form in spite of having a Block:D candidate above
 multi sub trait_mod:<is>(Routine:D $r, :$leading_docs!) {
-    SET_LEADING_DOCS($r, $leading_docs);
+    Rakudo::Internals::SET_LEADING_DOCS($r, $leading_docs);
 }
 multi sub trait_mod:<is>(Routine:D $r, :$trailing_docs!) {
-    SET_TRAILING_DOCS($r, $trailing_docs);
+    Rakudo::Internals::SET_TRAILING_DOCS($r, $trailing_docs);
 }
 
 multi sub trait_mod:<is>(Mu:U $docee, :$leading_docs!) {
-    SET_LEADING_DOCS($docee, $leading_docs);
+    Rakudo::Internals::SET_LEADING_DOCS($docee, $leading_docs);
 }
 multi sub trait_mod:<is>(Mu:U $docee, :$trailing_docs!) {
-    SET_TRAILING_DOCS($docee.HOW, $trailing_docs);
+    Rakudo::Internals::SET_TRAILING_DOCS($docee.HOW, $trailing_docs);
 }
 
 proto sub trait_mod:<does>(|) { * }
@@ -365,26 +304,10 @@ multi sub trait_mod:<of>(Routine:D $target, Mu:U $type) {
     $sig.set_returns($type)
 }
 
-multi sub trait_mod:<is>(Routine:D $r, :$hidden_from_backtrace!) {
-    DEPRECATED(
-      'is hidden-from-backtrace',
-      |<2015.03 2016.03>,
-      :what<Routine trait "is hidden_from_backtrace">,
-    );
-    $r.^mixin( role { method is-hidden-from-backtrace { True } } );
-}
 multi sub trait_mod:<is>(Routine:D $r, :$hidden-from-backtrace!) {
     $r.^mixin( role { method is-hidden-from-backtrace { True } } );
 }
 
-multi sub trait_mod:<is>(Routine:D $r, :$hidden_from_USAGE!) {
-    DEPRECATED(
-      'is hidden-from-USAGE',
-      |<2015.03 2016.03>,
-      :what<Routine trait "is hidden_from_USAGE">,
-    );
-    $r.^mixin( role { method is-hidden-from-USAGE { True } });
-}
 multi sub trait_mod:<is>(Routine:D $r, :$hidden-from-USAGE!) {
     $r.^mixin( role {
         method is-hidden-from-USAGE { True }
@@ -417,7 +340,6 @@ multi sub trait_mod:<as>(Parameter:D $param, $type) {
     $param.set_coercion($type);
 }
 
-my class Pair { ... }
 proto sub trait_mod:<handles>(|) { * }
 multi sub trait_mod:<handles>(Attribute:D $target, $thunk) {
     $target does role {

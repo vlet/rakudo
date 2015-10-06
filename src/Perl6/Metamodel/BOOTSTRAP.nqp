@@ -2772,7 +2772,7 @@ BEGIN {
     # Default invocation behavior delegates off to invoke.
     my $invoke_forwarder :=
         nqp::getstaticcode(sub ($self, *@pos, *%named) {
-            if !nqp::isconcrete($self) && !nqp::can($self, 'CALL-ME') && !nqp::can($self, 'postcircumfix:<( )>') {
+            if !nqp::isconcrete($self) && !nqp::can($self, 'CALL-ME') {
                 my $coercer_name := $self.HOW.name($self);
                 nqp::die("Cannot coerce to $coercer_name with named arguments")
                   if +%named;
@@ -2786,7 +2786,7 @@ BEGIN {
                 }
             }
             else {
-                nqp::can($self, 'CALL-ME') ?? $self.CALL-ME(|@pos, |%named) !! $self.postcircumfix:<( )>(|@pos, |%named);
+                $self.CALL-ME(|@pos, |%named)
             }
         });
     Mu.HOW.set_invocation_handler(Mu, $invoke_forwarder);
@@ -2961,6 +2961,7 @@ nqp::sethllconfig('perl6', nqp::hash(
             my @leaves := nqp::atkey(%phasers, '!LEAVE-ORDER');
             my @keeps  := nqp::atkey(%phasers, 'KEEP');
             my @undos  := nqp::atkey(%phasers, 'UNDO');
+            my @exceptions;
             unless nqp::isnull(@leaves) {
                 my int $n := nqp::elems(@leaves);
                 my int $i := 0;
@@ -2996,6 +2997,7 @@ nqp::sethllconfig('perl6', nqp::hash(
 #?if moar
                         nqp::p6capturelexwhere($phaser.clone())();
 #?endif
+                        CATCH { nqp::push(@exceptions, $_) }
                     }
                     $i++;
                 }
@@ -3013,8 +3015,19 @@ nqp::sethllconfig('perl6', nqp::hash(
                     nqp::p6capturelexwhere(nqp::atpos(@posts, $i).clone())(
                         nqp::ifnull($resultish, Mu));
 #?endif
+                    CATCH { nqp::push(@exceptions, $_); last; }
                     $i++;
                 }
+            }
+
+            if @exceptions {
+                if nqp::elems(@exceptions) > 1 {
+                    my %ex := nqp::gethllsym('perl6', 'P6EX');
+                    if !nqp::isnull(%ex) && nqp::existskey(%ex, 'X::PhaserExceptions') {
+                        nqp::atkey(%ex, 'X::PhaserExceptions')(@exceptions);
+                    }
+                }
+                nqp::rethrow(@exceptions[0]);
             }
         }
     },

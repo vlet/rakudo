@@ -59,25 +59,8 @@ my class Map does Iterable does Associative { # declared in BOOTSTRAP
     method iterator(Map:) { self.pairs.iterator }
     method list(Map:) { self.pairs.cache }
 
-    my role MapIterator does Iterator { # needs to be my for some reason
-        has $!hash-storage;
-        has $!hash-iter;
-
-        method BUILD(\hash) {
-            $!hash-storage := nqp::getattr(hash, Map, '$!storage');
-            $!hash-storage := nqp::hash() unless $!hash-storage.DEFINITE;
-            $!hash-iter    := nqp::iterator($!hash-storage);
-            self
-        }
-        method new(\hash) { nqp::create(self).BUILD(hash) }
-        method count-only() {
-            $!hash-iter := Mu;
-            nqp::p6box_i(nqp::elems($!hash-storage))
-        }
-    }
-
     multi method pairs(Map:D:) {
-        Seq.new(class :: does MapIterator {
+        Seq.new(class :: does Rakudo::Internals::MapIterator {
             method pull-one() {
                 if $!hash-iter {
                     my \tmp = nqp::shift($!hash-iter);
@@ -98,7 +81,7 @@ my class Map does Iterable does Associative { # declared in BOOTSTRAP
         }.new(self))
     }
     multi method keys(Map:D:) {
-        Seq.new(class :: does MapIterator {
+        Seq.new(class :: does Rakudo::Internals::MapIterator {
             method pull-one() {
                 $!hash-iter
                     ?? nqp::iterkey_s(nqp::shift($!hash-iter))
@@ -112,7 +95,7 @@ my class Map does Iterable does Associative { # declared in BOOTSTRAP
         }.new(self))
     }
     multi method kv(Map:D:) {
-        Seq.new(class :: does MapIterator {
+        Seq.new(class :: does Rakudo::Internals::MapIterator {
             has int $!on-value;
 
             method pull-one() is raw {
@@ -140,7 +123,7 @@ my class Map does Iterable does Associative { # declared in BOOTSTRAP
         }.new(self))
     }
     multi method values(Map:D:) {
-        Seq.new(class :: does MapIterator {
+        Seq.new(class :: does Rakudo::Internals::MapIterator {
             method pull-one() is raw {
                 $!hash-iter
                     ?? nqp::iterval(nqp::shift($!hash-iter))
@@ -154,7 +137,7 @@ my class Map does Iterable does Associative { # declared in BOOTSTRAP
         }.new(self))
     }
     multi method antipairs(Map:D:) {
-        Seq.new(class :: does MapIterator {
+        Seq.new(class :: does Rakudo::Internals::MapIterator {
             method pull-one() {
                 if $!hash-iter {
                     my \tmp = nqp::shift($!hash-iter);

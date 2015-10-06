@@ -1,11 +1,15 @@
 my class BagHash does Baggy {
 
-    method Bag (:$view) {
+    method BUILD(%!elems) { self }
+
+    method Bag(:$view) {
         if $view {
-            Bag.bless( :elems(%!elems) );
+            my \bag = nqp::create(Bag);
+            nqp::bindattr(bag,Bag,'%!elems',%!elems);
+            bag
         }
         else {
-            Bag.new-from-pairs(%!elems.values);
+           Bag.new-from-pairs(%!elems.values)
         }
     }
     method BagHash { self }
@@ -20,7 +24,8 @@ my class BagHash does Baggy {
           },
           STORE => -> $, $value is copy {
               if $value > 0 {
-                  (%!elems.AT-KEY(k.WHICH) //= ((k) => my $ = 0)).value = $value;
+                  (%!elems.AT-KEY(k.WHICH) //=
+                    ((k) => my Int $ = 0)).value = $value;
               }
               elsif $value == 0 {
                   %!elems.DELETE-KEY(k.WHICH);

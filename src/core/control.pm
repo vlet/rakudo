@@ -168,18 +168,20 @@ sub done() {
 }
 
 proto sub die(|) {*};
+multi sub die() {
+    my $stash  := CALLER::CALLER::;
+    my $payload = $stash<$!>.DEFINITE ?? $stash<$!> !! "Died";
+    $payload ~~ Exception
+      ?? $payload.throw
+      !! X::AdHoc.new(:$payload).throw
+}
 multi sub die(Exception:U $e) {
     X::AdHoc.new(:payload("Died with undefined " ~ $e.^name)).throw;
 }
-multi sub die($payload =
-    (CALLER::CALLER::.EXISTS-KEY('$!') and CALLER::CALLER::('$!').DEFINITE)
-     ?? CALLER::CALLER::('$!') !! "Died") {
-    if $payload ~~ Exception {
-        $payload.throw;
-    }
-    else {
-        X::AdHoc.new(:$payload).throw
-    }
+multi sub die($payload) {
+    $payload ~~ Exception
+      ?? $payload.throw
+      !! X::AdHoc.new(:$payload).throw
 }
 multi sub die(|cap ( *@msg )) {
     X::AdHoc.from-slurpy(|cap).throw
@@ -239,16 +241,10 @@ sub exit($status = 0) {
     $exit = $status;
 
     once {
-        THE_END();
+        Rakudo::Internals::THE_END();
         nqp::exit(nqp::unbox_i($exit.Int));
     }
     $exit;
-}
-
-sub THE_END {
-    my @END := nqp::p6bindattrinvres(nqp::create(List), List, '$!reified',
-        nqp::getcurhllsym("@END_PHASERS"));
-    for @END -> $end { $end() };
 }
 
 constant Inf = nqp::p6box_n(nqp::inf());

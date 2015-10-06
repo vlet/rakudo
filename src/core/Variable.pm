@@ -19,9 +19,9 @@ my class Variable {
         $*W.throw( self.slash, |c );
     }
 
-    submethod willdo(&block, $caller-levels = 2) {
-        $caller-levels == 2
-            ?? -> { block(nqp::atkey(nqp::ctxcaller(nqp::ctxcaller(nqp::ctx())), self.name)) }
+    submethod willdo(&block, $caller-levels = 3) {
+        $caller-levels == 3
+            ?? -> { block(nqp::atkey(nqp::ctxcaller(nqp::ctxcaller(nqp::ctxcaller(nqp::ctx()))), self.name)) }
             !! -> { block(nqp::atkey(nqp::ctxcaller(nqp::ctx()), self.name)) }
     }
 }
@@ -93,7 +93,7 @@ multi sub trait_mod:<is>(Variable:D $v, :$export!) {
     my @tags = flat 'ALL', (nqp::istype($export,Pair) ?? $export.key() !!
                             nqp::istype($export,Positional) ?? @($export)>>.key !!
                             'DEFAULT');
-    EXPORT_SYMBOL($var.VAR.name, @tags, $var);
+    Rakudo::Internals::EXPORT_SYMBOL($var.VAR.name, @tags, $var);
 }
 
 # does trait
