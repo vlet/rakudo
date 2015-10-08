@@ -4,7 +4,7 @@ my class Failure {
     has $!handled;
 
     multi method new() {
-        my $stash := CALLER::CALLER::;
+        my $stash := CALLER::;
         my $payload = $stash<$!>.DEFINITE ?? $stash<$!> !! "Died";
         self.bless(:exception( $payload ~~ Exception
           ?? $payload !! X::AdHoc.new(:$payload)
@@ -23,7 +23,7 @@ my class Failure {
     }
 
     submethod BUILD (:$!exception) {
-        $!backtrace = $!exception.backtrace() || Backtrace.new(9);
+        $!backtrace = $!exception.backtrace() || Backtrace.new(8);
         $!exception.reset-backtrace;
     }
 
@@ -72,7 +72,7 @@ my class Failure {
 
 proto sub fail(|) {*};
 multi sub fail() {
-    my $stash := CALLER::CALLER::;
+    my $stash := CALLER::;
     my $payload = $stash<$!>.DEFINITE ?? $stash<$!> !! "Died";
 
     my $fail := Failure.new( $payload ~~ Exception

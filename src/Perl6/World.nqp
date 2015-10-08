@@ -638,7 +638,8 @@ class Perl6::World is HLL::World {
                             self.import($/, self.stash_hash($EXPORT{$tag}), $package_source_name);
                         }
                         else {
-                            nqp::die("Error while importing from '$package_source_name': no such tag '$tag'");
+                            self.throw($/, ['X', 'Import', 'NoSuchTag'],
+                                source-package => $package_source_name, :$tag)
                         }
                     }
                     else {
@@ -667,8 +668,8 @@ class Perl6::World is HLL::World {
             }
             else {
                 if +@positional_imports {
-                    nqp::die("Error while importing from '$package_source_name':
- no EXPORT sub, but you provided positional argument in the 'use' statement");
+                    self.throw($/, ['X', 'Import', 'Positional'],
+                        source-package => $package_source_name)
                 }
             }
         }
@@ -755,6 +756,39 @@ class Perl6::World is HLL::World {
                 self.throw($/, 'X::Pragma::NoArgs', :$name)
             }
             %*PRAGMAS<trace> := $on;
+        }
+        elsif $name eq 'parameters' || $name eq 'variables' || $name eq 'attributes' || $name eq 'invocant' {
+            unless $on {
+                self.throw($/, 'X::Pragma::CannotNo', :$name)
+            }
+            unless nqp::defined($arglist) {
+                self.throw($/, 'X::Pragma::MustOneOf', :$name, :alternatives(':D, :U or :_'));
+            }
+
+            my $Pair := self.find_symbol(['Pair']);
+            my $Bool := self.find_symbol(['Bool']);
+            my $type;
+            for $arglist -> $arg {
+                if $type {
+                    self.throw($/, 'X::Pragma::OnlyOne', :$name);
+                }
+                elsif nqp::istype($arg,$Pair) {
+                    my $value := $arg.value;
+                    if nqp::istype($value,$Bool) && $value {
+                        $type := $arg.key;
+                        if $type eq 'D' || $type eq 'U' {
+                            %*PRAGMAS{$name} := $type;
+                            next;
+                        }
+                        elsif $type eq '_' {
+                            nqp::deletekey(%*PRAGMAS,$name);
+                            next;
+                        }
+                    }
+                    self.throw($/, 'X::InvalidTypeSmiley', :name($arg.key));
+                }
+                self.throw($/, 'X::Pragma::UnknownArg', :$name, :$arg);
+            }
         }
         else {
             $DEBUG("  '$name' is not a valid pragma") if $DEBUG;
@@ -1221,10 +1255,49 @@ class Perl6::World is HLL::World {
     # attribute/lexpad), bind constraint (what could we bind to this
     # slot later), and if specified a constraint on the inner value
     # and a default value.
-    method container_type_info($/, $sigil, @value_type, $shape?, :@post, :$subset_name, :$default_value) {
+    method container_type_info($/, $sigil, @value_type, $shape?, :@post, :$pragma!) {
         my %info;
         %info<sigil> := $sigil;
-        @value_type[0] := nqp::decont(@value_type[0]) if @value_type;
+        my $subset_name;
+
+        if @value_type {
+            my $smiley;
+
+            # we have a type smiley
+            if @value_type[0]<colonpairs> -> $pairs {
+                if nqp::elems($pairs) > 1 {
+                    nqp::die("may only specify one smiley"); # XXX
+                }
+                elsif $pairs<D> {
+                    $smiley := 'D';
+                }
+                elsif $pairs<U> {
+                    $smiley := 'U';
+                }
+                elsif $pairs<_> {
+                    $smiley := '_';
+                }
+                else {
+                    nqp::die("cannot handle this"); # XXX can this fire ever?
+                }
+            }
+
+            # no specific smiley, so need to check pragma
+            unless nqp::defined($smiley) {
+                if %*PRAGMAS{$pragma} -> $default {
+                    $smiley := $default;
+                }
+            }
+
+            # set up subset info
+            if $smiley && $smiley ne '_' {
+                $subset_name := ~@value_type[0];
+                my $Pair := self.find_symbol(['Pair']);
+                @post.push($Pair.new('defined', $smiley eq 'D' ?? 1 !! 0));
+            }
+            @value_type[0] := nqp::decont(@value_type[0].ast);
+        }
+
         for @post -> $con {
             @value_type[0] := self.create_subset(self.resolve_mo($/, 'subset'),
                 @value_type ?? @value_type[0] !! self.find_symbol(['Mu']),
@@ -1319,7 +1392,7 @@ class Perl6::World is HLL::World {
             if @value_type {
                 %info<bind_constraint> := @value_type[0];
                 %info<value_type>      := @value_type[0];
-                %info<default_value>   := $default_value // @value_type[0];
+                %info<default_value>   := @value_type[0];
             }
             else {
                 %info<bind_constraint> := self.find_symbol(['Mu']);
@@ -1441,7 +1514,7 @@ class Perl6::World is HLL::World {
         my $varast     := $var.ast;
         my $name       := $varast.name;
         my $BLOCK      := self.cur_lexpad();
-        my %cont_info  := self.container_type_info(NQPMu, $var<sigil>, $*OFTYPE ?? [$*OFTYPE.ast] !! []);
+        my %cont_info  := self.container_type_info(NQPMu, $var<sigil>, $*OFTYPE ?? [$*OFTYPE] !! [], :pragma<variables>);
         my $descriptor := self.create_container_descriptor(%cont_info<value_type>, 1, $name);
 
         self.install_lexical_container($BLOCK, $name, %cont_info, $descriptor,
@@ -2383,7 +2456,38 @@ class Perl6::World is HLL::World {
                 # single thing or a list of things, as done above)
                 self.nibble_to_str($/, $ast[0], $mkerr);
             } else {
-                $/.CURSOR.panic($mkerr());
+                # check if there's something in $ast that probably wont work
+                # as a compile time value
+                my $inspect := $ast;
+                while nqp::istype($inspect, QAST::Op) {
+                    $inspect := $inspect[0];
+                }
+                if nqp::istype($inspect, QAST::WVal) && !nqp::istype($inspect.value, self.find_symbol(["Block"])) {
+                    $/.CURSOR.panic($mkerr());
+                }
+                else {
+                    my $result;
+                    $result := self.compile_time_evaluate($/, $ast);
+                    # if we have something here, it's probably a Slip,
+                    # which stringifies fine but has to be split at ','
+                    # and potentially whitespace-corrected
+                    $result := join(' ', nqp::split(',', ~$result));
+                    while nqp::eqat($result, " ", 2) {
+                        $result := nqp::replace($result, 2, nqp::chars($result) - 2, nqp::substr($result, 3));
+                    }
+                    if nqp::chars($result) > 3 {
+                        # there's no foofix that allows more than two parts
+                        $/.CURSOR.panic($mkerr());
+                    }
+                    return $result;
+                    CONTROL {
+                        # we might get a warning from evaluating a Block
+                        $/.CURSOR.panic($mkerr());
+                    }
+                    CATCH {
+                        $/.CURSOR.panic($mkerr());
+                    }
+                }
             }
         } elsif nqp::istype($ast, QAST::Var) {
             my $result;
@@ -2643,13 +2747,21 @@ class Perl6::World is HLL::World {
             CATCH {
                 $ex := $_;
                 my $payload := nqp::getpayload($_);
-                if nqp::istype($payload, self.find_symbol(["X", "Inheritance", "UnknownParent"])) {
+                if nqp::istype($payload, self.find_symbol(["X", "Inheritance", "UnknownParent"], :setting-only)) {
                     my @suggestions := self.suggest_typename($payload.parent);
                     for @suggestions {
                         $payload.suggestions.push($_)
                     }
                 }
                 $nok := 1;
+                CATCH {
+                    # we only get here if we 
+                    # 1) don't have a setting 
+                    # 2) look # for X::Inheritance::UnknownParent while sorta-inside X,
+                    #    e.g. "class X is nosuchtrait { }" 
+                    # building the setting loops infinitely without this CATCH
+                    # block when calling find_symbol with :setting-only
+                }
             }
             CONTROL {
                 if nqp::getextype($_) == nqp::const::CONTROL_WARN {
@@ -2681,10 +2793,11 @@ class Perl6::World is HLL::World {
                 if nqp::isconcrete($!resolved) {
                     my int $added_update := 0;
                     try {
-                        my $cur_handle := $*W.handle;
+                        my $W := $*W;
+                        my $cur_handle := $W.handle;
                         if $cur_handle ne $!resolver {
-                            $*W.add_object($code);
-                            $*W.add_fixup_task(:deserialize_ast(QAST::Op.new(
+                            $W.add_object($code);
+                            $W.add_fixup_task(:deserialize_ast(QAST::Op.new(
                                 :op('callmethod'), :name('update'),
                                 QAST::WVal.new( :value(self) ),
                                 QAST::WVal.new( :value($code) )

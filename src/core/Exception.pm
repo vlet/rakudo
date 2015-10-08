@@ -160,6 +160,26 @@ my class X::Pragma::NoArgs is Exception {
     method message { "The '$.name' pragma does not take any arguments." }
 }
 
+my class X::Pragma::CannotNo is Exception {
+    has $.name;
+    method message { "'no $.name' is not an option." }
+}
+my class X::Pragma::MustOneOf is Exception {
+    has $.name;
+    has $.alternatives;
+    method message { "'$.name' pragma expects one parameter out of $.alternatives." }
+}
+my class X::Pragma::UnknownArg is Exception {
+    has $.name;
+    has $.arg;
+    method message { "Unknown argument '{$.arg.perl}' specified with the '$.name' pragma." }
+}
+
+my class X::Pragma::OnlyOne is Exception {
+    has $.name;
+    method message { "The '$.name' pragma only takes one argument." }
+}
+
 my role X::Control is Exception {
 }
 my class CX::Next does X::Control {
@@ -272,7 +292,7 @@ do {
                 nqp::printfh($err, $e.Str);
                 nqp::printfh($err, "\n");
             }
-            Rakudo::Internals::THE_END();
+            Rakudo::Internals.THE_END();
             CONTROL { when CX::Warn { .resume } }
         }
         if $! {
@@ -1387,6 +1407,11 @@ my class X::Syntax::Term::MissingInitializer does X::Syntax {
     method message { 'Term definition requires an initializer' }
 }
 
+my class X::Syntax::Variable::MissingInitializer does X::Syntax {
+    has $.type;
+    method message { "Variable definition of type $.type requires an initializer" }
+}
+
 my class X::Syntax::AddCategorical::TooFewParts does X::Syntax {
     has $.category;
     has $.needs;
@@ -1885,6 +1910,22 @@ my class X::Import::MissingSymbols is Exception {
     }
 }
 
+my class X::Import::NoSuchTag is Exception {
+    has $.source-package;
+    has $.tag;
+    method message() {
+        "Error while importing from '$.source-package': no such tag '$.tag'"
+    }
+}
+
+my class X::Import::Positional is Exception {
+    has $.source-package;
+    method message() {
+        "Error while importing from '$.source-package':\n"
+        ~ "no EXPORT sub, but you provided positional argument in the 'use' statement"
+    }
+}
+
 my class X::Numeric::Real is Exception {
     has $.target;
     has $.reason;
@@ -2140,6 +2181,13 @@ my class X::InvalidType does X::Comp {
             $msg := $msg ~ ". Did you mean '" ~ @.suggestions.join("', '") ~ "'?";
         }
         $msg;
+    }
+}
+
+my class X::InvalidTypeSmiley does X::Comp {
+    has $.name;
+    method message() {
+        "Invalid type smiley '$.name' used in type name";
     }
 }
 

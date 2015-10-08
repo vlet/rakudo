@@ -169,7 +169,7 @@ sub done() {
 
 proto sub die(|) {*};
 multi sub die() {
-    my $stash  := CALLER::CALLER::;
+    my $stash  := CALLER::;
     my $payload = $stash<$!>.DEFINITE ?? $stash<$!> !! "Died";
     $payload ~~ Exception
       ?? $payload.throw
@@ -241,7 +241,7 @@ sub exit($status = 0) {
     $exit = $status;
 
     once {
-        Rakudo::Internals::THE_END();
+        Rakudo::Internals.THE_END();
         nqp::exit(nqp::unbox_i($exit.Int));
     }
     $exit;
