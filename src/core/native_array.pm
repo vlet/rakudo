@@ -161,17 +161,41 @@ class array does Iterable is repr('VMArray') {
                 has int $!i;
                 has $!array;    # Native array we're iterating
 
-                method new($array) {
-                    my $iter := self.CREATE;
-                    nqp::bindattr($iter, self, '$!array', nqp::decont($array));
-                    $iter;
+                method BUILD(\array) {
+                    $!array := nqp::decont(array);
+                    $!i = -1;
+                    self
                 }
+                method new(\array) { nqp::create(self).BUILD(array) }
 
                 method pull-one() is raw {
-                    my int $i = $!i;
-                    $i < nqp::elems($!array)
-                        ?? nqp::atposref_i($!array, ($!i = $i + 1) - 1)
-                        !! IterationEnd
+                    ($!i = $!i + 1) < nqp::elems($!array)
+                      ?? nqp::atposref_i($!array,$!i)
+                      !! IterationEnd
+                }
+                method push-exactly($target, int $n) {
+                    my int $elems = nqp::elems($!array);
+                    my int $left  = $elems - $!i - 1;
+                    if $n >= $left {
+                        $target.push(nqp::atposref_i($!array,$!i))
+                          while ($!i = $!i + 1) < $elems;
+                        IterationEnd
+                    }
+                    else {
+                        my int $end = $!i + 1 + $n;
+                        $target.push(nqp::atposref_i($!array,$!i))
+                          while ($!i = $!i + 1) < $end;
+                        $!i = $!i - 1; # did one too many
+                        $n
+                    }
+                }
+                method push-all($target) {
+                    my int $i     = $!i;
+                    my int $elems = nqp::elems($!array);
+                    $target.push(nqp::atposref_i($!array,$i))
+                      while ($i = $i + 1) < $elems;
+                    $!i = $i;
+                    IterationEnd
                 }
             }.new(self)
         }
@@ -332,17 +356,41 @@ class array does Iterable is repr('VMArray') {
                 has int $!i;
                 has $!array;    # Native array we're iterating
 
-                method new($array) {
-                    my $iter := self.CREATE;
-                    nqp::bindattr($iter, self, '$!array', nqp::decont($array));
-                    $iter;
+                method BUILD(\array) {
+                    $!array := nqp::decont(array);
+                    $!i = -1;
+                    self
                 }
+                method new(\array) { nqp::create(self).BUILD(array) }
 
                 method pull-one() is raw {
-                    my int $i = $!i;
-                    $i < nqp::elems($!array)
-                        ?? nqp::atposref_n($!array, ($!i = $i + 1) - 1)
-                        !! IterationEnd
+                    ($!i = $!i + 1) < nqp::elems($!array)
+                      ?? nqp::atposref_n($!array,$!i)
+                      !! IterationEnd
+                }
+                method push-exactly($target, int $n) {
+                    my int $elems = nqp::elems($!array);
+                    my int $left  = $elems - $!i - 1;
+                    if $n >= $left {
+                        $target.push(nqp::atposref_n($!array,$!i))
+                          while ($!i = $!i + 1) < $elems;
+                        IterationEnd
+                    }
+                    else {
+                        my int $end = $!i + 1 + $n;
+                        $target.push(nqp::atposref_n($!array,$!i))
+                          while ($!i = $!i + 1) < $end;
+                        $!i = $!i - 1; # did one too many
+                        $n
+                    }
+                }
+                method push-all($target) {
+                    my int $i     = $!i;
+                    my int $elems = nqp::elems($!array);
+                    $target.push(nqp::atposref_n($!array,$i))
+                      while ($i = $i + 1) < $elems;
+                    $!i = $i;
+                    IterationEnd
                 }
             }.new(self)
         }

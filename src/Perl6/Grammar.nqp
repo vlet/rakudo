@@ -2311,26 +2311,8 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
             [ <.ws> <term_init=initializer> || <.typed_panic: "X::Syntax::Term::MissingInitializer"> ]
         | <variable_declarator>
           [
-          || <?{ $*SCOPE eq 'has' }> <.newpad>
-                [
-                || <.ws> <initializer>
-                || { my $colonpairs := $*OFTYPE<colonpairs>;
-                     if $colonpairs<D> {
-                         self.typed_panic: "X::Syntax::Variable::MissingInitializer", type => ~$*OFTYPE;
-                     }
-                     elsif $colonpairs<U> || $colonpairs<_> {
-                     }
-                     elsif %*PRAGMAS<attributes> -> $default {
-                         if $default eq 'D' {
-                             self.typed_panic: "X::Syntax::Variable::MissingInitializer", type => ~$*OFTYPE ~ ' (with implicit :D)';
-                         }
-                     }
-                     1;
-                   }
-                ]? { $*ATTR_INIT_BLOCK := $*W.pop_lexpad() }
-          || <.ws> <initializer>
-          || <?{ $*OFTYPE<colonpairs><D> }> { self.typed_panic: "X::Syntax::Variable::MissingInitializer", type => ~$*OFTYPE }
-          || <?>
+          || <?{ $*SCOPE eq 'has' }> <.newpad> [<.ws> <initializer>]? { $*ATTR_INIT_BLOCK := $*W.pop_lexpad() }
+          || [<.ws> <initializer>]?
           ]
         | '(' ~ ')' <signature('variable')> [ <.ws> <trait>+ ]? [ <.ws> <initializer> ]?
         | <routine_declarator>
@@ -3026,7 +3008,7 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
 
         [
         | '\\'? <defterm>
-        | <variable>
+        | <variable> { $¢.add_variable(~$<variable>) } # for new &infix:<foo> synonyms
         | <?>
         ]
         { $*IN_DECL := ''; }
@@ -3067,10 +3049,7 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
 
     rule trait {
         :my $*IN_DECL := '';
-        [
-        | <trait_mod>
-        | <colonpair>
-        ]
+        <trait_mod>
     }
 
     proto rule trait_mod { <...> }
@@ -3160,6 +3139,7 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
 
     token term:sym<name> {
         <longname>
+        :my %colonpairs;
         :my $*longname;
         :my $pos;
         :my $*IN_RETURN;
@@ -3180,6 +3160,20 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
                     || $<accept_any>=<?>
                 ] <.ws> ')'
             ]?
+            {
+                for $<longname><colonpair> {
+                    if $_<identifier> {
+                        my $name := $_<identifier>.Str;
+                        if $name eq 'D' || $name eq 'U' || $name eq '_' {
+                            %colonpairs{$name} := 1;
+                        }
+                        else {
+                            $*W.throw($/, ['X', 'InvalidTypeSmiley'], :$name)
+                        }
+                    }
+                }
+            }
+            [<?{ %colonpairs }> <colonpairs=.AS_MATCH(%colonpairs)>]?
         || <args(1)>
             {
                 if !$<args><invocant> {

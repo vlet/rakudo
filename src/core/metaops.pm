@@ -78,9 +78,11 @@ sub METAOP_ZIP(\op, &reduce) {
         my $laze = True;
         my @loi = eager for lol -> \elem {
             $laze = False unless elem.is-lazy;
-            nqp::istype(elem, Iterable)
-                ?? elem.iterator
-                !! elem.list.iterator;
+            Rakudo::Internals::WhateverIterator.new(
+                nqp::istype(elem, Iterable)
+                    ?? elem.iterator
+                    !! elem.list.iterator
+            )
         }
         gather {
             loop {
@@ -100,85 +102,192 @@ sub METAOP_ZIP(\op, &reduce) {
 
 proto sub METAOP_REDUCE_LEFT(|) { * }
 multi sub METAOP_REDUCE_LEFT(\op, \triangle) {
+    if op.count > 2 and op.count < Inf {
+        my $count = op.count;
 #?if jvm
-    my $ :=
+        my $ :=
 #?endif
-    sub (\iterablish) {
-        my \source = nqp::istype(iterablish, Iterable)
-            ?? iterablish.iterator
-            !! iterablish.list.iterator;
+        sub (+values) {
+            my \source = nqp::istype(values, Iterable)
+                ?? values.iterator
+                !! values.list.iterator;
 
-        my \first = source.pull-one;
-        return () if first =:= IterationEnd;
+            my \first = source.pull-one;
+            return () if first =:= IterationEnd;
 
-        my $result := first;
-        GATHER({
-            take first;
-            until (my \value = source.pull-one) =:= IterationEnd {
-                take ($result := op.($result, value));
-            }
-        }).lazy-if(source.is-lazy);
+            my @args.push: first;
+            GATHER({
+                take first;
+                until (my \current = source.pull-one) =:= IterationEnd {
+                    @args.push: current;
+                    if @args.elems == $count {
+                        my \val = op.(|@args);
+                        take val;
+                        @args = ();
+                        @args.push: val;  # use of push allows op to return a Slip
+                    }
+                }
+            }).lazy-if(source.is-lazy);
+        }
+    }
+    else {
+#?if jvm
+        my $ :=
+#?endif
+        sub (+values) {
+            my \source = nqp::istype(values, Iterable)
+                ?? values.iterator
+                !! values.list.iterator;
+
+            my \first = source.pull-one;
+            return () if first =:= IterationEnd;
+
+            my $result := first;
+            GATHER({
+                take first;
+                until (my \value = source.pull-one) =:= IterationEnd {
+                    take ($result := op.($result, value));
+                }
+            }).lazy-if(source.is-lazy);
+        }
     }
 }
 
 multi sub METAOP_REDUCE_LEFT(\op) {
+    if op.count > 2 and op.count < Inf {
+        my $count = op.count;
 #?if jvm
-    my $ :=
+        my $ :=
 #?endif
-    sub (\iterablish) {
-        my \iter = nqp::istype(iterablish, Iterable)
-            ?? iterablish.iterator
-            !! iterablish.list.iterator;
-        my \first = iter.pull-one;
-        return op.() if first =:= IterationEnd;
+        sub (+values) {
+            my \iter = nqp::istype(values, Iterable)
+                ?? values.iterator
+                !! values.list.iterator;
+            my \first = iter.pull-one;
+            return op.() if first =:= IterationEnd;
 
-        my \second = iter.pull-one;
-        return op.count <= 1 ?? op.(first) !! first if second =:= IterationEnd;
-
-        my $result := op.(first, second);
-        until (my \value = iter.pull-one) =:= IterationEnd {
-            $result := op.($result, value);
+            my @args.push: first;
+            my $result := first;
+            until (my \value = iter.pull-one) =:= IterationEnd {
+                @args.push: value;
+                if @args.elems == $count {
+                    my \val = op.(|@args);
+                    @args = ();
+                    @args.push: val;  # use of push allows op to return a Slip
+                    $result := val;
+                }
+            }
+            $result;
         }
-        $result;
+    }
+    else {
+#?if jvm
+        my $ :=
+#?endif
+        sub (+values) {
+            my \iter = nqp::istype(values, Iterable)
+                ?? values.iterator
+                !! values.list.iterator;
+            my \first = iter.pull-one;
+            return op.() if first =:= IterationEnd;
+
+            my \second = iter.pull-one;
+            return op.count <= 1 ?? op.(first) !! first if second =:= IterationEnd;
+
+            my $result := op.(first, second);
+            until (my \value = iter.pull-one) =:= IterationEnd {
+                $result := op.($result, value);
+            }
+            $result;
+        }
     }
 }
 
 proto sub METAOP_REDUCE_RIGHT(|) { * }
 multi sub METAOP_REDUCE_RIGHT(\op, \triangle) {
+    if op.count > 2 and op.count < Inf {
+        my $count = op.count;
 #?if jvm
-    my $ :=
+        my $ :=
 #?endif
-    sub (+values) {
-        my \iter = values.reverse.iterator;
-        my $result := iter.pull-one;
-        return () if $result =:= IterationEnd;
+        sub (+values) {
+            my \source = values.reverse.iterator;
+            my \first = source.pull-one;
+            return () if first =:= IterationEnd;
 
-        gather {
-            take $result;
-            while (my $elem := iter.pull-one) !=:= IterationEnd {
-                take $result := op.($elem, $result)
-            }
-        }.lazy-if(values.is-lazy);
+            my @args.unshift: first;
+            GATHER({
+                take first;
+                while (my \current = source.pull-one) !=:= IterationEnd {
+                    @args.unshift: current;
+                    if @args.elems == $count {
+                        my \val = op.(|@args);
+                        take val;
+                        @args = ();
+                        @args.unshift: val;  # allow op to return a Slip
+                    }
+                }
+            }).lazy-if(source.is-lazy);
+        }
+    }
+    else {
+        sub (+values) {
+            my \iter = values.reverse.iterator;
+            my $result := iter.pull-one;
+            return () if $result =:= IterationEnd;
+
+            gather {
+                take $result;
+                while (my $elem := iter.pull-one) !=:= IterationEnd {
+                    take $result := op.($elem, $result)
+                }
+            }.lazy-if(values.is-lazy);
+        }
     }
 }
 multi sub METAOP_REDUCE_RIGHT(\op) {
-
+    if op.count > 2 and op.count < Inf {
+        my $count = op.count;
 #?if jvm
-    my $ :=
+        my $ :=
 #?endif
-    sub (+values) {
-        my \iter = values.reverse.iterator;
-        my \first = iter.pull-one;
-        return op.() if first =:= IterationEnd;
+        sub (+values) {
+            my \iter = values.reverse.iterator;
+            my \first = iter.pull-one;
+           return op.() if first =:= IterationEnd;
 
-        my \second = iter.pull-one;
-        return op.(first) if second =:= IterationEnd;
-
-        my $result := op.(second, first);
-        until (my \value = iter.pull-one) =:= IterationEnd {
-            $result := op.(value, $result);
+            my @args.unshift: first;
+            my $result := first;
+            until (my \value = iter.pull-one) =:= IterationEnd {
+                @args.unshift: value;
+                if @args.elems == $count {
+                    my \val = op.(|@args);
+                    @args = ();
+                    @args.unshift: val;  # allow op to return a Slip
+                    $result := val;
+                }
+            }
+            $result;
         }
-        $result;
+    }
+    else {
+#?if jvm
+        my $ :=
+#?endif
+        sub (+values) {
+            my \iter = values.reverse.iterator;
+            my \first = iter.pull-one;
+            return op.() if first =:= IterationEnd;
+
+            my \second = iter.pull-one;
+            return op.(first) if second =:= IterationEnd;
+
+            my $result := op.(second, first);
+            until (my \value = iter.pull-one) =:= IterationEnd {
+                $result := op.(value, $result);
+            }
+            $result;
+        }
     }
 }
 
@@ -388,61 +497,8 @@ multi sub HYPER(&operator, Iterable:D \left, Iterable:D \right, :$dwim-left, :$d
     X::HyperOp::Infinite.new(:side<right>, :&operator).throw if right-iterator.is-lazy and
         (not $dwim-right or $dwim-left);
 
-    my class DwimIterator does Iterator {
-        has $!source;
-        has $!buffer;
-        has $!ended;
-        has $!whatever;
-        has $!i;
-        has $!elems;
-        method new(\source) {
-            my $iter := self.CREATE;
-            nqp::bindattr($iter, self, '$!source', source);
-            nqp::bindattr($iter, self, '$!buffer', IterationBuffer.new);
-            nqp::bindattr($iter, self, '$!ended', False);
-            nqp::bindattr($iter, self, '$!whatever', False);
-            nqp::bindattr($iter, self, '$!i', 0);
-            nqp::bindattr($iter, self, '$!elems', 0);
-            $iter
-        }
-        method pull-one() is raw {
-            if ($!ended) {
-                if ($!whatever) {
-                    $!buffer.AT-POS($!elems - 1);
-                }
-                else {
-                    $!buffer.AT-POS((($!i := $!i + 1) - 1) % $!elems);
-                }
-            }
-            else {
-                my \value := $!source.pull-one;
-                if value =:= IterationEnd {
-                    $!ended := True;
-                    $!elems == 0 ?? value !! self.pull-one()
-                }
-                elsif nqp::istype(value, Whatever) {
-                    $!whatever := True;
-                    $!ended := True;
-                    self.pull-one()
-                }
-                else {
-                    $!elems := $!elems + 1;
-                    $!buffer.push(value);
-                    value
-                }
-            }
-        }
-        method ended() { $!ended }
-        method count-elems() {
-            unless ($!ended) {
-                $!elems := $!elems + 1 until $!source.pull-one =:= IterationEnd;
-            }
-            $!elems
-        }
-    }
-
-    my \lefti  :=  DwimIterator.new(left-iterator);
-    my \righti :=  DwimIterator.new(right-iterator);
+    my \lefti  := Rakudo::Internals::DwimIterator.new(left-iterator);
+    my \righti := Rakudo::Internals::DwimIterator.new(right-iterator);
 
     my \result := IterationBuffer.new;
     loop {

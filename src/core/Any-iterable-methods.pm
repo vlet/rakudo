@@ -324,16 +324,25 @@ augment class Any {
         Seq.new(class :: does Grepper {
             method pull-one() is raw {
                 my Mu $value;
-                until ($value := $!iter.pull-one) =:= IterationEnd {
-                    return-rw $value if $value.match($!test);
+                return-rw $value if $value.match($!test)
+                  until ($value := $!iter.pull-one) =:= IterationEnd;
+                IterationEnd
+            }
+            method push-exactly($target, int $n) {
+                my Mu $value;
+                my int $done;
+                until IterationEnd =:= ($value := $!iter.pull-one) {
+                    if $value.match($!test) {
+                        $target.push($value);
+                        return $done unless ($done = $done + 1) < $n;
+                    }
                 }
                 IterationEnd
             }
             method push-all($target) {
                 my Mu $value;
-                until ($value := $!iter.pull-one) =:= IterationEnd {
-                    $target.push($value) if $value.match($!test);
-                }
+                $target.push($value) if $value.match($!test)
+                  until ($value := $!iter.pull-one) =:= IterationEnd;
                 IterationEnd
             }
         }.new(self, $test))
@@ -345,17 +354,32 @@ augment class Any {
               !! Seq.new(class :: does Grepper {
                      method pull-one() is raw {
                          my Mu $value;
-                         until ($value := $!iter.pull-one) =:= IterationEnd {
-                             return-rw $value if $!test($value);
-                         }
+                         return-rw $value if $!test($value)
+                           until ($value := $!iter.pull-one) =:= IterationEnd;
                          IterationEnd   # in case of last
+                     }
+                     method push-exactly($target, int $n) {
+                         my Mu $value;
+                         my int $done;
+                         until IterationEnd =:= ($value := $!iter.pull-one) {
+                             if $!test($value) {
+                                 $target.push($value);
+                                 return $done unless ($done = $done + 1) < $n;
+                             }
+                         }
+                         IterationEnd
                      }
                      method push-all($target) {
                          my Mu $value;
-                         until ($value := $!iter.pull-one) =:= IterationEnd {
-                             $target.push($value) if $!test($value);
-                         }
-                         IterationEnd   # in case of last
+                         $target.push($value) if $!test($value)
+                           until ($value := $!iter.pull-one) =:= IterationEnd;
+                         IterationEnd
+                     }
+                     method sink-all() {
+                         my Mu $value;
+                         $!test($value)
+                           until ($value := $!iter.pull-one) =:= IterationEnd;
+                         IterationEnd
                      }
                  }.new(self, $test))
         } else {
@@ -387,16 +411,25 @@ augment class Any {
         Seq.new(class :: does Grepper {
             method pull-one() is raw {
                 my Mu $value;
-                until ($value := $!iter.pull-one) =:= IterationEnd {
-                    return-rw $value if $!test.ACCEPTS($value);
+                return-rw $value if $!test.ACCEPTS($value)
+                  until ($value := $!iter.pull-one) =:= IterationEnd;
+                IterationEnd
+            }
+            method push-exactly($target, int $n) {
+                my Mu $value;
+                my int $done;
+                until IterationEnd =:= ($value := $!iter.pull-one) {
+                    if $!test.ACCEPTS($value) {
+                        $target.push($value);
+                        return $done unless ($done = $done + 1) < $n;
+                    }
                 }
                 IterationEnd
             }
             method push-all($target) {
                 my Mu $value;
-                until ($value := $!iter.pull-one) =:= IterationEnd {
-                    $target.push($value) if $!test.ACCEPTS($value);
-                }
+                $target.push($value) if $!test.ACCEPTS($value)
+                  until ($value := $!iter.pull-one) =:= IterationEnd;
                 IterationEnd
             }
         }.new(self, $test))
@@ -701,45 +734,15 @@ augment class Any {
     proto method reduce(|) { * }
     multi method reduce(&with) is nodal {
         return unless self.DEFINITE;
-
-        # XXX GLR we really, really should be able to do reduce on the
-        # iterable in left-associative cases without having to make a
-        # list in memory.
-        if &with.count > 2 and &with.count < Inf {
-            my int $count = &with.count;
-            if try &with.prec<assoc> eq 'right' {
-                my \iter = self.reverse.iterator;
-                my Mu $val := iter.pull-one;
-                return if $val =:= IterationEnd;
-                my @args = $val;
-                while (my \current = iter.pull-one) !=:= IterationEnd {
-                    @args.prepend: current;
-                    if @args.elems == $count {
-                        $val := with(|@args);
-                        @args = $val;
-                    }
-                }
-                return $val;
-            }
-            else {
-                my \iter = nqp::istype(self, Iterator)
-                           ?? self.iterator
-                           !! self.list.iterator;
-                my Mu $val := iter.pull-one;
-                return if $val =:= IterationEnd;
-                my @args = $val;
-                while (my \current = iter.pull-one) !=:= IterationEnd {
-                    @args.append: current;
-                    if @args.elems == $count {
-                        $val := with(|@args);
-                        @args = $val;
-                    }
-                }
-                return $val;
-            }
-        }
         my $reducer := find-reducer-for-op(&with);
         $reducer(&with)(self) if $reducer;
+    }
+
+    proto method produce(|) { * }
+    multi method produce(&with) is nodal {
+        return unless self.DEFINITE;
+        my $reducer := find-reducer-for-op(&with);
+        $reducer(&with,1)(self) if $reducer;
     }
 
     proto method unique(|) is nodal {*}
@@ -761,6 +764,20 @@ augment class Any {
                     unless nqp::existskey($!seen, $needle) {
                         nqp::bindkey($!seen, $needle, 1);
                         return $value;
+                    }
+                }
+                IterationEnd
+            }
+            method push-exactly($target, int $n) {
+                my Mu $value;
+                my str $needle;
+                my int $done;
+                until IterationEnd =:= ($value := $!iter.pull-one) {
+                    $needle = nqp::unbox_s($value.WHICH);
+                    unless nqp::existskey($!seen, $needle) {
+                        nqp::bindkey($!seen, $needle, 1);
+                        $target.push($value);
+                        return $done unless ($done = $done + 1) < $n;
                     }
                 }
                 IterationEnd
@@ -809,6 +826,20 @@ augment class Any {
                     unless nqp::existskey($!seen, $needle) {
                         nqp::bindkey($!seen, $needle, 1);
                         return $value;
+                    }
+                }
+                IterationEnd
+            }
+            method push-exactly($target, int $n) {
+                my Mu $value;
+                my str $needle;
+                my int $done;
+                until IterationEnd =:= ($value := $!iter.pull-one) {
+                    $needle = nqp::unbox_s(&!as($value).WHICH);
+                    unless nqp::existskey($!seen, $needle) {
+                        nqp::bindkey($!seen, $needle, 1);
+                        $target.push($value);
+                        return $done unless ($done = $done + 1) < $n;
                     }
                 }
                 IterationEnd
@@ -863,6 +894,22 @@ augment class Any {
                 }
                 IterationEnd
             }
+            method push-exactly($target, int $n) {
+                my Mu $value;
+                my str $needle;
+                my int $done;
+                until IterationEnd =:= ($value := $!iter.pull-one) {
+                    $needle = nqp::unbox_s($value.WHICH);
+                    if nqp::existskey($!seen, $needle) {
+                        $target.push($value);
+                        return $done unless ($done = $done + 1) < $n;
+                    }
+                    else {
+                        nqp::bindkey($!seen, $needle, 1);
+                    }
+                }
+                IterationEnd
+            }
             method push-all($target) {
                 my Mu $value;
                 my str $needle;
@@ -905,6 +952,22 @@ augment class Any {
                     nqp::existskey($!seen, $needle)
                       ?? return $value
                       !! nqp::bindkey($!seen, $needle, 1);
+                }
+                IterationEnd
+            }
+            method push-exactly($target, int $n) {
+                my Mu $value;
+                my str $needle;
+                my int $done;
+                until IterationEnd =:= ($value := $!iter.pull-one) {
+                    $needle = nqp::unbox_s(&!as($value).WHICH);
+                    if nqp::existskey($!seen, $needle) {
+                        $target.push($value);
+                        return $done unless ($done = $done + 1) < $n;
+                    }
+                    else {
+                        nqp::bindkey($!seen, $needle, 1);
+                    }
                 }
                 IterationEnd
             }
@@ -960,6 +1023,20 @@ augment class Any {
                 }
                 IterationEnd
             }
+            method push-exactly($target, int $n) {
+                my Mu $value;
+                my $which;
+                my int $done;
+                until IterationEnd =:= ($value := $!iter.pull-one) {
+                    $which = &!as($value);
+                    unless with($which,$!last) {
+                        $!last = $which;
+                        $target.push($value);
+                        return $done unless ($done = $done + 1) < $n;
+                    }
+                }
+                IterationEnd
+            }
             method push-all($target) {
                 my Mu $value;
                 my $which;
@@ -991,6 +1068,18 @@ augment class Any {
                     unless with($value,$!last) {
                         $!last = $value;
                         return $value;
+                    }
+                }
+                IterationEnd
+            }
+            method push-exactly($target, int $n) {
+                my Mu $value;
+                my int $done;
+                until IterationEnd =:= ($value := $!iter.pull-one) {
+                    unless with($value,$!last) {
+                        $!last = $value;
+                        $target.push($value);
+                        return $done unless ($done = $done + 1) < $n;
                     }
                 }
                 IterationEnd
@@ -1090,6 +1179,7 @@ proto sub join(|) { * }
 multi sub join($sep = '', *@values) { @values.join($sep) }
 
 sub reduce (&with, +list)  { list.reduce(&with) }
+sub produce (&with, +list)  { list.produce(&with) }
 
 proto sub unique(|) { * }
 multi sub unique(+values, |c) { my $laze = values.is-lazy; values.unique(|c).lazy-if($laze) }

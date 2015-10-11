@@ -411,7 +411,7 @@ class Perl6::World is HLL::World {
 
         # Tag UNIT with a magical lexical. Also if we're compiling CORE,
         # give it such a tag too.
-        my $name := %*COMPILING<%?OPTIONS><setting> eq 'NULL'
+        my $name := $*COMPILING_CORE_SETTING
           ?? '!CORE_MARKER'
           !! '!UNIT_MARKER';
         my $marker := self.pkg_create_mo($/, %*HOW<package>, :$name);
@@ -808,6 +808,32 @@ class Perl6::World is HLL::World {
               :line($line // self.current_line($/)),
             );
         }
+    }
+
+    method handle_OFTYPE_for_pragma($/, $pragma) {
+        my $colonpairs := $*OFTYPE<colonpairs>;
+        if $colonpairs<D> || $colonpairs<U> || $colonpairs<_> {
+            # This is handled in typename and value:sym<name> directly.
+        }
+
+        # no specific smiley found, check for default
+        elsif %*PRAGMAS{$pragma} -> $default {
+            my class FakeOfType { has $!type; method ast() { $!type } }
+            if $default ne '_' {
+                if $*OFTYPE {
+                    $*OFTYPE.make(
+                        self.create_definite_type($*W.resolve_mo($/, 'definite'),
+                            $*OFTYPE.ast, $default eq 'D')
+                    )
+                }
+                else {
+                    $*OFTYPE := FakeOfType.new(type => self.create_definite_type(
+                        $*W.resolve_mo($/, 'definite'), self.find_symbol(['Any']),
+                        $default eq 'D'));
+                }
+            }
+        }
+        1
     }
 
     method current_file() {
@@ -1255,53 +1281,16 @@ class Perl6::World is HLL::World {
     # attribute/lexpad), bind constraint (what could we bind to this
     # slot later), and if specified a constraint on the inner value
     # and a default value.
-    method container_type_info($/, $sigil, @value_type, $shape?, :@post, :$pragma!) {
+    method container_type_info($/, $sigil, @value_type, $shape?, :@post) {
         my %info;
         %info<sigil> := $sigil;
-        my $subset_name;
 
-        if @value_type {
-            my $smiley;
-
-            # we have a type smiley
-            if @value_type[0]<colonpairs> -> $pairs {
-                if nqp::elems($pairs) > 1 {
-                    nqp::die("may only specify one smiley"); # XXX
-                }
-                elsif $pairs<D> {
-                    $smiley := 'D';
-                }
-                elsif $pairs<U> {
-                    $smiley := 'U';
-                }
-                elsif $pairs<_> {
-                    $smiley := '_';
-                }
-                else {
-                    nqp::die("cannot handle this"); # XXX can this fire ever?
-                }
-            }
-
-            # no specific smiley, so need to check pragma
-            unless nqp::defined($smiley) {
-                if %*PRAGMAS{$pragma} -> $default {
-                    $smiley := $default;
-                }
-            }
-
-            # set up subset info
-            if $smiley && $smiley ne '_' {
-                $subset_name := ~@value_type[0];
-                my $Pair := self.find_symbol(['Pair']);
-                @post.push($Pair.new('defined', $smiley eq 'D' ?? 1 !! 0));
-            }
-            @value_type[0] := nqp::decont(@value_type[0].ast);
-        }
+        @value_type[0] := nqp::decont(@value_type[0]) if @value_type;
 
         for @post -> $con {
             @value_type[0] := self.create_subset(self.resolve_mo($/, 'subset'),
                 @value_type ?? @value_type[0] !! self.find_symbol(['Mu']),
-                $con,  :name($subset_name));
+                $con);
         }
         if $sigil eq '@' {
             %info<bind_constraint> := self.find_symbol(['Positional']);
@@ -1514,7 +1503,8 @@ class Perl6::World is HLL::World {
         my $varast     := $var.ast;
         my $name       := $varast.name;
         my $BLOCK      := self.cur_lexpad();
-        my %cont_info  := self.container_type_info(NQPMu, $var<sigil>, $*OFTYPE ?? [$*OFTYPE] !! [], :pragma<variables>);
+        self.handle_OFTYPE_for_pragma($/,'variables');
+        my %cont_info  := self.container_type_info(NQPMu, $var<sigil>, $*OFTYPE ?? [$*OFTYPE.ast] !! []);
         my $descriptor := self.create_container_descriptor(%cont_info<value_type>, 1, $name);
 
         self.install_lexical_container($BLOCK, $name, %cont_info, $descriptor,
@@ -2471,17 +2461,11 @@ class Perl6::World is HLL::World {
                     # if we have something here, it's probably a Slip,
                     # which stringifies fine but has to be split at ','
                     # and potentially whitespace-corrected
-                    $result := join(' ', nqp::split(',', ~$result));
-                    while nqp::eqat($result, " ", 2) {
-                        $result := nqp::replace($result, 2, nqp::chars($result) - 2, nqp::substr($result, 3));
-                    }
-                    if nqp::chars($result) > 3 {
-                        # there's no foofix that allows more than two parts
-                        $/.CURSOR.panic($mkerr());
-                    }
-                    return $result;
+                    my @parts := nqp::split(' ', ~$result);
+                    return nqp::join(" ", @parts);
                     CONTROL {
-                        # we might get a warning from evaluating a Block
+                        # we might get a warning from evaluating a Block like
+                        # "undefined value ..." which is reason enough to die
                         $/.CURSOR.panic($mkerr());
                     }
                     CATCH {
@@ -2491,11 +2475,9 @@ class Perl6::World is HLL::World {
             }
         } elsif nqp::istype($ast, QAST::Var) {
             my $result;
-            {
-                $result := self.compile_time_evaluate($/, $ast);
-                CATCH {
-                    $/.CURSOR.panic($mkerr());
-                }
+            $result := self.compile_time_evaluate($/, $ast);
+            CATCH {
+                $/.CURSOR.panic($mkerr());
             }
             return nqp::unbox_s($result);
         } else {
@@ -2684,6 +2666,15 @@ class Perl6::World is HLL::World {
         my %args := hash(:refinee($refinee), :refinement($refinement));
         if nqp::defined($name) { %args<name> := $name; }
         my $mo := $how.new_type(|%args);
+        self.add_object($mo);
+        return $mo;
+    }
+
+    # Gets a definite type (possibly freshly created, possibly an
+    # interned one).
+    method create_definite_type($how, $base_type, $definite) {
+       # Create the meta-object and add to root objects.
+        my $mo := $how.new_type(:$base_type, :$definite);
         self.add_object($mo);
         return $mo;
     }
@@ -3198,11 +3189,7 @@ class Perl6::World is HLL::World {
         for $longname<colonpair> {
             if $_<coloncircumfix> && !$_<identifier> {
                 my $cp_str;
-                if %*COMPILING<%?OPTIONS><setting> ne 'NULL' {
-                    # Safe to evaluate it directly; no bootstrap issues.
-                    $cp_str := ':<' ~ ~self.compile_time_evaluate($_, $_.ast) ~ '>';
-                }
-                else {
+                if $*COMPILING_CORE_SETTING {
                     my $ast := $_.ast;
 
                     # XXX hackish for dealing with <longname> stuff, which
@@ -3215,6 +3202,11 @@ class Perl6::World is HLL::World {
                     $cp_str := nqp::istype($ast, QAST::Want) && nqp::istype($ast[2], QAST::SVal)
                         ?? ':<' ~ $ast[2].value ~ '>'
                         !! ~$_;
+                }
+
+                # Safe to evaluate it directly; no bootstrap issues.
+                else {
+                    $cp_str := ':<' ~ ~self.compile_time_evaluate($_, $_.ast) ~ '>';
                 }
                 @components[+@components - 1] := @components[+@components - 1] ~ $cp_str;
             }
