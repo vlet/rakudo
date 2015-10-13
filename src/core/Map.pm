@@ -60,7 +60,7 @@ my class Map does Iterable does Associative { # declared in BOOTSTRAP
     method list(Map:) { self.pairs.cache }
 
     multi method pairs(Map:D:) {
-        Seq.new(class :: does Rakudo::Internals::MapIterator {
+        Seq.new(class :: does Rakudo::Internals::MappyIterator {
             method pull-one() {
                 if $!hash-iter {
                     my \tmp = nqp::shift($!hash-iter);
@@ -71,9 +71,10 @@ my class Map does Iterable does Associative { # declared in BOOTSTRAP
                 }
             }
             method push-all($target) {
+                my $no-sink;
                 while $!hash-iter {
                     my \tmp = nqp::shift($!hash-iter);
-                    $target.push(
+                    $no-sink := $target.push(
                       Pair.new(nqp::iterkey_s(tmp), nqp::iterval(tmp)));
                 }
                 IterationEnd
@@ -81,21 +82,23 @@ my class Map does Iterable does Associative { # declared in BOOTSTRAP
         }.new(self))
     }
     multi method keys(Map:D:) {
-        Seq.new(class :: does Rakudo::Internals::MapIterator {
+        Seq.new(class :: does Rakudo::Internals::MappyIterator {
             method pull-one() {
                 $!hash-iter
                     ?? nqp::iterkey_s(nqp::shift($!hash-iter))
                     !! IterationEnd
             }
             method push-all($target) {
-                $target.push(nqp::iterkey_s(nqp::shift($!hash-iter)))
-                  while $!hash-iter;
+                my $no-sink;
+                $no-sink :=
+                  $target.push(nqp::iterkey_s(nqp::shift($!hash-iter)))
+                    while $!hash-iter;
                 IterationEnd
             }
         }.new(self))
     }
     multi method kv(Map:D:) {
-        Seq.new(class :: does Rakudo::Internals::MapIterator {
+        Seq.new(class :: does Rakudo::Internals::MappyIterator {
             has int $!on-value;
 
             method pull-one() is raw {
@@ -113,31 +116,33 @@ my class Map does Iterable does Associative { # declared in BOOTSTRAP
                 }
             }
             method push-all($target) {
+                my $no-sink;
                 while $!hash-iter {
                     my \tmp = nqp::shift($!hash-iter);
-                    $target.push(nqp::iterkey_s(tmp));
-                    $target.push(nqp::iterval(tmp));
+                    $no-sink := $target.push(nqp::iterkey_s(tmp));
+                    $no-sink := $target.push(nqp::iterval(tmp));
                 }
                 IterationEnd
             }
         }.new(self))
     }
     multi method values(Map:D:) {
-        Seq.new(class :: does Rakudo::Internals::MapIterator {
+        Seq.new(class :: does Rakudo::Internals::MappyIterator {
             method pull-one() is raw {
                 $!hash-iter
                     ?? nqp::iterval(nqp::shift($!hash-iter))
                     !! IterationEnd
             }
             method push-all($target) {
-                $target.push(nqp::iterval(nqp::shift($!hash-iter)))
+                my $no-sink;
+                $no-sink := $target.push(nqp::iterval(nqp::shift($!hash-iter)))
                   while $!hash-iter;
                 IterationEnd
             }
         }.new(self))
     }
     multi method antipairs(Map:D:) {
-        Seq.new(class :: does Rakudo::Internals::MapIterator {
+        Seq.new(class :: does Rakudo::Internals::MappyIterator {
             method pull-one() {
                 if $!hash-iter {
                     my \tmp = nqp::shift($!hash-iter);
@@ -148,9 +153,10 @@ my class Map does Iterable does Associative { # declared in BOOTSTRAP
                 }
             }
             method push-all($target) {
+                my $no-sink;
                 while $!hash-iter {
                     my \tmp = nqp::shift($!hash-iter);
-                    $target.push(
+                    $no-sink := $target.push(
                       Pair.new( nqp::iterval(tmp), nqp::iterkey_s(tmp) ));
                 }
                 IterationEnd

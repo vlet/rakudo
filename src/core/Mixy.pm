@@ -1,6 +1,6 @@
 my role Mixy does Baggy  {
 
-    method PAIR(\key) { Pair.new(key, my Real $ = 0 ) }
+    method PAIR(\key,\value) { Pair.new(key, my Real $ = value ) }
     method SANITY(%elems --> Nil) {
         for %elems -> $p {
             %elems.DELETE-KEY($p.key) if $p.value.value == 0;
@@ -19,6 +19,10 @@ my role Mixy does Baggy  {
               .value == 1 ?? .key.gist !! "{.key.gist}({.value})"
           } ).join(', ')
         ~ ')';
+    }
+
+    multi method kxxv(Mixy:D:) {
+        fail ".kxxv is not supported on a {self.^name}";
     }
 
     multi method grab(Mixy:D: $count?) {

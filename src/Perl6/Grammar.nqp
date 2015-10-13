@@ -480,8 +480,9 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
                     my $opname := $cf<circumfix>
                         ?? $*W.colonpair_nibble_to_str($/, $cf<circumfix><nibble>)
                         !! '';
-                    my $canname  := $category ~ ":sym<" ~ $opname ~ ">";
-                    my $termname := $category ~ ":<" ~ $opname ~ ">";
+                    my $cname := $*W.canonicalize_opname($opname);
+                    my $canname  := $category ~ ":sym" ~ $cname;
+                    my $termname := $category ~ ":" ~ $cname;
                     $/.CURSOR.add_categorical($category, $opname, $canname, $termname, :defterm);
                 }
             }
@@ -1029,11 +1030,11 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
     token install_doc_phaser { <?> }
 
     token vnum {
-        \d+ | '*'
+        \w+ | '*'
     }
 
     token version {
-        <?before v\d+> 'v' $<vstr>=[<vnum>+ % '.' '+'?]
+        <?before v\d+\w*> 'v' $<vstr>=[<vnum>+ % '.' '+'?]
         <!before '-'|\'> # cheat because of LTM fail
     }
 
@@ -1504,15 +1505,27 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
         $<doc>=[ 'DOC' \h+ ]**0..1
         <sym> <.ws>
         [
-        | <version> [ <?{ ~$<version><vnum>[0] eq '5' }> {
-                        my $module := $*W.load_module($/, 'Perl5', {}, $*GLOBALish);
-                        do_import($/, $module, 'Perl5');
-                        $*W.import_EXPORTHOW($/, $module);
-                    } ]?
-                    [ <?{ ~$<version><vnum>[0] eq '6' }> {
-                        $*MAIN   := 'MAIN';
-                        $*STRICT := 1 if $*begin_compunit;
-                    } ]?
+        | <version> [
+                    ||  <?{ $<version><vnum>[0] == 5 }> {
+                            my $module := $*W.load_module($/, 'Perl5', {}, $*GLOBALish);
+                            do_import($/, $module, 'Perl5');
+                            $/.CURSOR.import_EXPORTHOW($/, $module);
+                        }
+                    ||  <?{ $<version><vnum>[0] == 6 }> {
+                            my $version_parts := $<version><vnum>;
+                            my $vwant := $<version>.ast.compile_time_value;
+                            my $vhave := $*W.find_symbol(['Version']).new('6.b');  # XXX need to use same source as Version.pm
+                            my $sm := $*W.find_symbol(['&infix:<~~>']);
+                            if !$sm($vhave,$vwant) {
+                                $/.CURSOR.typed_panic: 'X::Language::Unsupported', version => ~$<version>;
+                            }
+                            $*MAIN   := 'MAIN';
+                            $*STRICT := 1 if $*begin_compunit;
+                        }
+                    ||  {
+                            $/.CURSOR.typed_panic: 'X::Language::Unsupported', version => ~$<version>;
+                        }
+                    ]
         | <module_name>
             [
             || <.spacey> <arglist> <.cheat_heredoc>? <?{ $<arglist><EXPR> }> <.explain_mystery> <.cry_sorrows>
@@ -2501,7 +2514,7 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
                 my $opname := $cf<circumfix>
                     ?? $*W.colonpair_nibble_to_str($/, $cf<circumfix><nibble> // $cf<circumfix><semilist>)
                     !! '';
-                my $canname := $category ~ ":sym<" ~ $opname ~ ">";
+                my $canname := $category ~ ":sym" ~ $*W.canonicalize_opname($opname);
                 $/.CURSOR.add_categorical($category, $opname, $canname, $<deflongname>.ast, $*DECLARAND);
             }
         }
@@ -2626,7 +2639,7 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
                 my $opname := $cf<circumfix>
                     ?? $*W.colonpair_nibble_to_str($/, $cf<circumfix><nibble>)
                     !! '';
-                my $canname := $category ~ ":sym<" ~ $opname ~ ">";
+                my $canname := $category ~ ":sym" ~ $*W.canonicalize_opname($opname);
                 $/.CURSOR.add_categorical($category, $opname, $canname, $<deflongname>.ast, $*DECLARAND);
             }
         }
@@ -4390,10 +4403,10 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
     }
 
     method add_variable($name) {
-        my $categorical := $name ~~ /^'&'((\w+)':<'\s*(\S+?)\s*'>')$/;
+        my $categorical := $name ~~ /^'&'((\w+) [ ':<'\s*(\S+?)\s*'>' | ':«'\s*(\S+?)\s*'»' ])$/;
         if $categorical {
             self.add_categorical(~$categorical[0][0], ~$categorical[0][1],
-                ~$categorical[0][0] ~ ':sym<' ~ ~$categorical[0][1] ~ '>',
+                ~$categorical[0][0] ~ ':sym' ~ $*W.canonicalize_opname($categorical[0][1]),
                 ~$categorical[0]);
         }
     }

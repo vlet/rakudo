@@ -1072,10 +1072,10 @@ class Perl6::World is HLL::World {
         for %to_install {
             my $v := $_.value;
             self.add_object_if_no_sc($v);
-            my $categorical := match($_.key, /^ '&' (\w+) ':<' (.+) '>' $/);
+            my $categorical := match($_.key, /^ '&' (\w+) [ ':<' (.+) '>' | ':«' (.+) '»' ] $/);
             if $categorical {
                 $/.CURSOR.add_categorical(~$categorical[0], ~$categorical[1],
-                    ~$categorical[0] ~ ':sym<' ~$categorical[1] ~ '>',
+                    ~$categorical[0] ~ ':sym' ~ self.canonicalize_opname($categorical[1]),
                     nqp::substr($_.key, 1), $v);
             }
         }
@@ -3200,13 +3200,13 @@ class Perl6::World is HLL::World {
                         $ast := $ast[0];
                     }
                     $cp_str := nqp::istype($ast, QAST::Want) && nqp::istype($ast[2], QAST::SVal)
-                        ?? ':<' ~ $ast[2].value ~ '>'
+                        ?? ':' ~ self.canonicalize_opname($ast[2].value)
                         !! ~$_;
                 }
 
-                # Safe to evaluate it directly; no bootstrap issues.
                 else {
-                    $cp_str := ':<' ~ ~self.compile_time_evaluate($_, $_.ast) ~ '>';
+                    # Safe to evaluate it directly; no bootstrap issues.
+                    $cp_str := ':' ~ self.canonicalize_opname(self.compile_time_evaluate($_, $_.ast));
                 }
                 @components[+@components - 1] := @components[+@components - 1] ~ $cp_str;
             }
@@ -3623,7 +3623,7 @@ class Perl6::World is HLL::World {
         %opts<panic> := @panic[0] if @panic;
         %opts<sorrows> := p6ize_recursive(@*SORROWS) if @*SORROWS;
         %opts<worries> := p6ize_recursive(@*WORRIES) if @*WORRIES;
-        %opts<filename> := nqp::box_s(nqp::getlexdyn('$?FILES'), self.find_symbol(['Str']));
+        %opts<filename> := nqp::box_s(self.current_file,self.find_symbol(['Str']));
         try {
             my $group_type := self.find_symbol(['X', 'Comp', 'Group']);
             return $group_type.new(|%opts);
@@ -3759,11 +3759,7 @@ class Perl6::World is HLL::World {
                     %opts{$p.key} := nqp::hllizefor($p.value, 'perl6');
                 }
             }
-            my $file        := nqp::getlexdyn('$?FILES');
-            %opts<filename> := nqp::box_s(
-                (nqp::isnull($file) ?? '<unknown file>' !! $file),
-                self.find_symbol(['Str'])
-            );
+            %opts<filename> := nqp::box_s(self.current_file,self.find_symbol(['Str']));
             try { return $ex.new(|%opts) };
         }
 
@@ -3874,8 +3870,7 @@ class Perl6::World is HLL::World {
         if $found_xcbt {
             my $xcbt := $x_comp_bt.new(exception => $p6ex, :$use-case);
             $xcbt.SET_FILE_LINE(
-                nqp::box_s(nqp::getlexdyn('$?FILES'),
-                    self.find_symbol(['Str'])),
+                nqp::box_s(self.current_file,self.find_symbol(['Str'])),
                 nqp::box_i(self.current_line($/),self.find_symbol(['Int'])),
             );
             $xcbt.throw;
@@ -3899,8 +3894,7 @@ class Perl6::World is HLL::World {
         }
         if nqp::can($p6ex, 'SET_FILE_LINE') {
             $p6ex.SET_FILE_LINE(
-                nqp::box_s(nqp::getlexdyn('$?FILES'),
-                    self.find_symbol(['Str'])),
+                nqp::box_s(self.current_file,self.find_symbol(['Str'])),
                 nqp::box_i(self.current_line($/),self.find_symbol(['Int'])),
             );
         }
@@ -3913,6 +3907,24 @@ class Perl6::World is HLL::World {
             self.add_object($obj);
         }
         $obj
+    }
+
+    method canonicalize_opname($opname) {
+        if $opname ~~ /<[ < > ]>/ && !($opname ~~ /<[ « » $ \\ " ' ]>/) {
+            '«' ~ $opname ~ '»'
+        }
+        else {
+            my $op := '';
+            my int $i := 0;
+            my int $e := nqp::chars($opname);
+            while $i < $e {
+                my $ch := nqp::substr($opname,$i,1);
+                $op := $op ~ '\\' if $ch eq '<' || $ch eq '>';
+                $op := $op ~ $ch;
+                ++$i;
+            }
+            '<' ~ $op ~ '>';
+        }
     }
 }
 

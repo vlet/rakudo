@@ -694,8 +694,10 @@ my class List does Iterable does Positional { # declared in BOOTSTRAP
             }
             method push-all($target) {
                 my int $i;
+                my $no-sink;
                 while $!number {
-                    $target.push(nqp::atpos($!list,$i = $!elems.rand.floor));
+                    $no-sink :=
+                      $target.push(nqp::atpos($!list,$i = $!elems.rand.floor));
                     nqp::bindpos(
                       $!list,$i,nqp::atpos($!list,nqp::unbox_i(--$!elems)));
                     $!number = $!number - 1;
@@ -773,6 +775,7 @@ my class List does Iterable does Positional { # declared in BOOTSTRAP
     }
 
     method rotor(List:D: *@cycle, :$partial) is nodal {
+        self!ensure-allocated;
         die "Must specify *how* to rotor a List"
           unless @cycle.is-lazy || @cycle;
 
@@ -867,7 +870,7 @@ my class List does Iterable does Positional { # declared in BOOTSTRAP
 }
 
 # The , operator produces a List.
-proto sub infix:<,>(|) {*}
+proto sub infix:<,>(|) is pure {*}
 multi sub infix:<,>() {
     my \result = List.CREATE;
     nqp::bindattr(result, List, '$!reified', BEGIN IterationBuffer.CREATE);

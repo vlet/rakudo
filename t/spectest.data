@@ -428,6 +428,7 @@ S06-advanced/callsame.t
 S06-advanced/lexical-subs.t
 S06-advanced/recurse.t
 S06-advanced/return.t
+S06-advanced/stub.t
 S06-advanced/wrap.t
 S06-currying/assuming-and-mmd.t
 S06-currying/misc.t
@@ -939,6 +940,7 @@ S32-num/log.t
 S32-num/narrow.t
 S32-num/pi.t
 S32-num/polar.t
+S32-num/polymod.t
 S32-num/power.t
 S32-num/rand.t
 S32-num/rat.t

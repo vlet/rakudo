@@ -1,7 +1,7 @@
 my role Baggy does QuantHash {
     has %!elems; # key.WHICH => (key,value)
 
-    method PAIR(\key) { Pair.new(key, my Int $ = 0 ) }
+    method PAIR(\key,\value) { Pair.new(key, my Int $ = value ) }
     method SANITY(%elems --> Nil) {
         my @toolow;
         for %elems -> $p {
@@ -14,19 +14,47 @@ my role Baggy does QuantHash {
     }
     multi method new(Baggy: +@args) {
         my %elems;
+        my $hash := nqp::bindattr(%elems,Map,'$!storage',nqp::hash());
+        my str $which;
         for @args {
-            (%elems{.WHICH} //= self.PAIR($_)).value++
-        } 
+            $which = nqp::unbox_s(.WHICH);
+            if nqp::existskey($hash,$which) {
+                my $value :=
+                  nqp::getattr(nqp::atkey($hash,$which),Pair,'$!value');
+                $value = $value + 1;
+            }
+            else {
+                nqp::bindkey($hash,$which,self.PAIR($_,1));
+            }
+        }
         nqp::create(self).BUILD(%elems)
     }
     method new-from-pairs(*@pairs) {
         my %elems;
+        my $hash := nqp::bindattr(%elems,Map,'$!storage',nqp::hash());
+        my str $which;
         for @pairs {
             when Pair {
-                (%elems.AT-KEY(.key.WHICH) //= self.PAIR(.key)).value += .value;
+                $which = nqp::unbox_s(.key.WHICH);
+                if nqp::existskey($hash,$which) {
+                    my $value :=
+                      nqp::getattr(nqp::atkey($hash,$which),Pair,'$!value');
+                    $value = $value + .value;
+                }
+                else {
+                    nqp::bindkey($hash,$which,self.PAIR(.key,.value));
+                }
             }
             default {
-                (%elems.AT-KEY(.WHICH) //= self.PAIR($_)).value++;
+                $which = nqp::unbox_s(.WHICH);
+                if nqp::existskey($hash,$which) {
+                    my $value :=
+                      nqp::getattr(nqp::atkey($hash,$which),Pair,'$!value');
+                    $value = $value + 1;
+                }
+                else {
+                    nqp::bindkey($hash,$which,self.PAIR($_,1));
+                }
             }
         }
         self.SANITY(%elems);
@@ -36,7 +64,7 @@ my role Baggy does QuantHash {
     method default(--> Int) { 0 }
 
     multi method pairs(Baggy:D:) {
-        Seq.new(class :: does Rakudo::Internals::MapIterator {
+        Seq.new(class :: does Rakudo::Internals::MappyIterator {
             method pull-one() {
                 $!hash-iter
                   ?? nqp::iterval(nqp::shift($!hash-iter))
@@ -44,21 +72,25 @@ my role Baggy does QuantHash {
             }
             method push-exactly($target, int $n) {
                 my int $done;
-                while $!hash-iter {
-                    $target.push(nqp::iterval(nqp::shift($!hash-iter)));
-                    return $done unless ($done = $done + 1) < $n;
+                my $no-sink;
+                while $done < $n {
+                    return IterationEnd unless $!hash-iter;
+                    $no-sink :=
+                      $target.push(nqp::iterval(nqp::shift($!hash-iter)));
+                    $done = $done + 1;
                 }
-                IterationEnd
+                $done
             }
             method push-all($target) {
-                $target.push(nqp::iterval(nqp::shift($!hash-iter)))
+                my $no-sink;
+                $no-sink := $target.push(nqp::iterval(nqp::shift($!hash-iter)))
                   while $!hash-iter;
                 IterationEnd
             }
         }.new(%!elems))
     }
     multi method keys(Baggy:D:) {
-        Seq.new(class :: does Rakudo::Internals::MapIterator {
+        Seq.new(class :: does Rakudo::Internals::MappyIterator {
             method pull-one() {
                 $!hash-iter
                   ?? nqp::iterval(nqp::shift($!hash-iter)).key
@@ -66,21 +98,26 @@ my role Baggy does QuantHash {
             }
             method push-exactly($target, int $n) {
                 my int $done;
-                while $!hash-iter {
-                    $target.push(nqp::iterval(nqp::shift($!hash-iter)).key);
-                    return $done unless ($done = $done + 1) < $n;
+                my $no-sink;
+                while $done < $n {
+                    return IterationEnd unless $!hash-iter;
+                    $no-sink :=
+                      $target.push(nqp::iterval(nqp::shift($!hash-iter)).key);
+                    $done = $done + 1;
                 }
-                IterationEnd
+                $done
             }
             method push-all($target) {
-                $target.push(nqp::iterval(nqp::shift($!hash-iter)).key)
-                  while $!hash-iter;
+                my $no-sink;
+                $no-sink :=
+                  $target.push(nqp::iterval(nqp::shift($!hash-iter)).key)
+                    while $!hash-iter;
                 IterationEnd
             }
         }.new(%!elems))
     }
     multi method kv(Baggy:D:) {
-        Seq.new(class :: does Rakudo::Internals::MapIterator {
+        Seq.new(class :: does Rakudo::Internals::MappyIterator {
             has Mu $!value;
 
             method pull-one() is raw {
@@ -101,28 +138,42 @@ my role Baggy does QuantHash {
             }
             method push-exactly($target, int $n) {
                 my int $done;
-                while $!hash-iter {
+                my $no-sink;
+                if $!value.DEFINITE {
+                    $no-sink := $target.push($!value);
+                    $!value := Mu;
+                    $done = $done + 1;
+                }
+                while $done < $n {
+                    return IterationEnd unless $!hash-iter;
                     my \tmp =
                       nqp::decont(nqp::iterval(nqp::shift($!hash-iter)));
-                    $target.push(nqp::getattr(tmp,Pair,'$!key'));
-                    $target.push(nqp::getattr(tmp,Pair,'$!value'));
-                    return $done unless ($done = $done + 1) < $n;
+                    $no-sink := $target.push(nqp::getattr(tmp,Pair,'$!key'));
+                    if ($done = $done + 1) < $n {
+                        $no-sink :=
+                          $target.push(nqp::getattr(tmp,Pair,'$!value'));
+                        $done = $done + 1;
+                    }
+                    else {
+                        $!value := nqp::getattr(tmp,Pair,'$!value');
+                    }
                 }
-                IterationEnd
+                $done
             }
             method push-all($target) {
+                my $no-sink;
                 while $!hash-iter {
                     my \tmp =
                       nqp::decont(nqp::iterval(nqp::shift($!hash-iter)));
-                    $target.push(nqp::getattr(tmp,Pair,'$!key'));
-                    $target.push(nqp::getattr(tmp,Pair,'$!value'));
+                    $no-sink := $target.push(nqp::getattr(tmp,Pair,'$!key'));
+                    $no-sink := $target.push(nqp::getattr(tmp,Pair,'$!value'));
                 }
                 IterationEnd
             }
         }.new(%!elems))
     }
     multi method values(Baggy:D:) {
-        Seq.new(class :: does Rakudo::Internals::MapIterator {
+        Seq.new(class :: does Rakudo::Internals::MappyIterator {
             method pull-one() is raw {
                 $!hash-iter
                     ?? nqp::getattr(nqp::decont(
@@ -131,15 +182,18 @@ my role Baggy does QuantHash {
             }
             method push-exactly($target, int $n) {
                 my int $done;
-                while $!hash-iter {
-                    $target.push(nqp::getattr(nqp::decont(
+                my $no-sink;
+                while $done < $n {
+                    return IterationEnd unless $!hash-iter;
+                    $no-sink := $target.push(nqp::getattr(nqp::decont(
                       nqp::iterval(nqp::shift($!hash-iter))),Pair,'$!value'));
-                    return $done unless ($done = $done + 1) < $n;
+                    $done = $done + 1;
                 }
-                IterationEnd
+                $done
             }
             method push-all($target) {
-                $target.push(nqp::getattr(nqp::decont(
+                my $no-sink;
+                $no-sink := $target.push(nqp::getattr(nqp::decont(
                   nqp::iterval(nqp::shift($!hash-iter))),Pair,'$!value'
                 )) while $!hash-iter;
                 IterationEnd
@@ -147,7 +201,7 @@ my role Baggy does QuantHash {
         }.new(%!elems))
     }
     multi method antipairs(Baggy:D:) {
-        Seq.new(class :: does Rakudo::Internals::MapIterator {
+        Seq.new(class :: does Rakudo::Internals::MappyIterator {
             method pull-one() {
                 if $!hash-iter {
                     my \tmp = nqp::iterval(nqp::shift($!hash-iter));
@@ -159,24 +213,28 @@ my role Baggy does QuantHash {
             }
             method push-exactly($target, int $n) {
                 my int $done;
-                while $!hash-iter {
+                my $no-sink;
+                while $done < $n {
+                    return IterationEnd unless $!hash-iter;
                     my \tmp = nqp::iterval(nqp::shift($!hash-iter));
-                    $target.push(Pair.new(tmp.value, tmp.key));
-                    return $done unless ($done = $done + 1) < $n;
+                    $no-sink := $target.push(Pair.new(tmp.value, tmp.key));
+                    $done = $done + 1;
                 }
                 IterationEnd
             }
             method push-all($target) {
+                my $no-sink;
                 while $!hash-iter {
                     my \tmp = nqp::iterval(nqp::shift($!hash-iter));
-                    $target.push(Pair.new(tmp.value, tmp.key));
+                    $no-sink := $target.push(Pair.new(tmp.value, tmp.key));
                 }
                 IterationEnd
             }
         }.new(%!elems))
     }
-    method kxxv(Baggy:D:) {
-        Seq.new(class :: does Rakudo::Internals::MapIterator {
+    proto method kxxv(|) { * }
+    multi method kxxv(Baggy:D:) {
+        Seq.new(class :: does Rakudo::Internals::MappyIterator {
             has Mu $!key;
             has int $!times;
 
@@ -196,11 +254,12 @@ my role Baggy does QuantHash {
                 }
             }
             method push-all($target) {
+                my $no-sink;
                 while $!hash-iter {
                     my \tmp = nqp::iterval(nqp::shift($!hash-iter));
                     $!key  := tmp.key;
                     $!times = tmp.value + 1;
-                    $target.push($!key) while $!times = $!times - 1;
+                    $no-sink := $target.push($!key) while $!times = $!times - 1;
                 }
                 IterationEnd
             }
