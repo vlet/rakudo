@@ -11,6 +11,15 @@ New in 2015.10:
     + `<?same>` assertion in regexes implemented
     + Methods `file` and `line` in `Code` point to the location of the
        declaration
+    + grep now accepts :k, :v, :kv, :p attributes
+    + first now accepts :k, :v, :p attributes
+    + first also accepts :end attribute to indicate searching from end of list
+    + `is equiv<+>` as shortcut for `is equiv(&infix:<+>)`. Same for `tighter`
+       and `looser`.
+    + `Supply.throttle` for rate-limiting
+    + `Hash.append` added, now that Hash.push doesn't flatten
+    + Internal methods ZEN-POS/ZEN-KEY added, for handling zen-slices
+    + Promise.start now passes on any extra parameters to async block
   + Incompatible Changes
     + Array.push is now used for pushing one element (mostly); Array.append
       exists for pushing multiple values. Same for `unshift`/`prepend`
@@ -29,6 +38,16 @@ New in 2015.10:
     + Fixed `once` block semantics (RT #126293)
     + A dying `LEAVE` block doesn't prevent other `LEAVE` blocks from running
       anymore
+    + `Str.tc` now does an actual Unicode title case operation
+    + polymod has not been GLRified yet
+    + List/Supply.squish did not properly handle single element lists/supplies
+    + Several fixes to the REPL, e.g. with regards to completions
+    + with/without now topicalize properly
+    + fix usage of match variable in replacement part of substitution
+ + Deprecations:
+    + grep-index() deprecated in favour of grep(:k)
+    + first-index() deprecated in favour of first(:k)
+    + last-index() deprecated in fevour of first(:end,:k)
 
 New in 2015.09
  + Features

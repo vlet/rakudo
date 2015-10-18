@@ -5,6 +5,17 @@ use Perl6::Ops;
 use QRegex;
 use QAST;
 
+sub block_closure($code) {
+    my $closure := QAST::Op.new(
+        :op('callmethod'), :name('clone'),
+        $code
+    );
+    $closure := QAST::Op.new( :op('p6capturelex'), $closure);
+    $closure.annotate('past_block', $code.ann('past_block'));
+    $closure.annotate('code_object', $code.ann('code_object'));
+    $closure
+}
+
 register_op_desugar('p6callmethodhow', -> $qast {
     $qast   := $qast.shallow_clone();
     my $inv := $qast.shift;
@@ -45,6 +56,32 @@ register_op_desugar('p6fatalize', -> $qast {
                 QAST::Var.new( :name($tmp), :scope('local') )
             )
         ))
+});
+register_op_desugar('p6for', -> $qast {
+    my $cond := $qast[0];
+    my $block := $qast[1];
+    my $label := $qast[2];
+    my $for-list-name := QAST::Node.unique('for-list');
+    my $iscont := QAST::Op.new(:op('iscont'), QAST::Var.new( :name($for-list-name), :scope('local') ));
+    $iscont.named('item');
+    my $call := QAST::Op.new(
+        :op<callmethod>, :name<map>, :node($qast),
+        QAST::Var.new( :name($for-list-name), :scope('local') ),
+        block_closure($block),
+        $iscont,
+    );
+    if $label {
+        $call.push($label);
+    }
+    my $bind := QAST::Op.new(
+        :op('bind'),
+        QAST::Var.new( :name($for-list-name), :scope('local'), :decl('var') ),
+        $cond,
+    );
+    QAST::Stmts.new(
+        $bind,
+        QAST::Op.new( :op<callmethod>, :name($qast.ann('context')), $call )
+    );
 });
 
 role STDActions {
@@ -181,9 +218,20 @@ class Perl6::Actions is HLL::Actions does STDActions {
         nqp::atpos($res, 0);
     }
 
+    sub xblock_immediate_with($xblock) {
+        $xblock[1] := pblock_immediate_with($xblock[1]);
+        $xblock;
+    }
+
     sub xblock_immediate($xblock) {
         $xblock[1] := pblock_immediate($xblock[1]);
         $xblock;
+    }
+
+    sub pblock_immediate_with($pblock) {
+        my $pb := block_immediate($pblock.ann('uninstall_if_immediately_used').shift);
+        $pb.arity(1);  # gotta force this, or Block node gets optimized away
+        $pb;
     }
 
     sub pblock_immediate($pblock) {
@@ -871,32 +919,22 @@ Compilation unit '$file' contained the following violations:
                     unless $past.ann('past_block') {
                         $past := make_topic_block_ref($/, $past, migrate_stmt_id => $*STATEMENT_ID);
                     }
-                    my $for-list-name := QAST::Node.unique('for-list');
-                    my $iscont := QAST::Op.new(:op('iscont'), QAST::Var.new( :name($for-list-name), :scope('local') ));
-                    $iscont.named('item');
-                    my $call := QAST::Op.new(
-                        :op<callmethod>, :name<map>, :node($/),
-                        QAST::Var.new( :name($for-list-name), :scope('local') ),
-                        block_closure($past),
-                        $iscont,
-                    );
-                    my $bind := QAST::Op.new(
-                        :op('bind'),
-                        QAST::Var.new( :name($for-list-name), :scope('local'), :decl('var') ),
-                        $cond,
-                    );
                     $past := QAST::Want.new(
-                        QAST::Stmts.new(
-                            $bind,
-                            QAST::Op.new( :op<callmethod>, :name<eager>, $call )
+                        QAST::Op.new(
+                            :op<p6for>, :node($/),
+                            $cond,
+                            $past,
                         ),
-                        'v', QAST::Stmts.new(
-                            $bind,
-                            QAST::Op.new( :op<callmethod>, :name<sink>, $call )
+                        'v', QAST::Op.new(
+                            :op<p6for>, :node($/),
+                            $cond,
+                            $past,
                         ),
                     );
-                    my $sinkee := $past[0][1];
-                    $past.annotate('statement_level', -> { $sinkee.name('sink') });
+                    $past[0].annotate('context', 'eager');
+                    $past[2].annotate('context', 'sink');
+                    my $sinkee := $past[0];
+                    $past.annotate('statement_level', -> { $sinkee.annotate('context', 'sink') });
                 }
                 else {
                     $past := QAST::Op.new($cond, $past, :op(~$ml<sym>), :node($/) );
@@ -1194,26 +1232,45 @@ Compilation unit '$file' contained the following violations:
 
     method statement_control:sym<if>($/) {
         my $count := +$<xblock> - 1;
-        my $past := xblock_immediate( $<xblock>[$count].ast );
-        $past.op(~$<sym>[$count] ~~ /with/ ?? 'with' !! 'if');
-        # push the else block if any, otherwise 'if' returns C<Nil> (per S04)
-        $past.push( $<else>
-                    ?? pblock_immediate( $<else>.ast )
-                    !! QAST::WVal.new( :value($*W.find_symbol(['Empty'])) )
-        );
+        my $past;
+        if ~$<sym>[$count] ~~ /with/ {
+            $past := xblock_immediate_with( $<xblock>[$count].ast );
+            $past.op('with');
+            $past.push( $<else>
+                        ?? pblock_immediate_with( $<else>.ast )
+                        !! QAST::WVal.new( :value($*W.find_symbol(['Empty'])) )
+            );
+        }
+        else {
+            $past := xblock_immediate( $<xblock>[$count].ast );
+            $past.op('if');
+            $past.push( $<else>
+                        ?? pblock_immediate( $<else>.ast )
+                        !! QAST::WVal.new( :value($*W.find_symbol(['Empty'])) )
+            );
+        }
         # build if/then/elsif structure
         while $count > 0 {
             $count--;
             my $else := $past;
-            $past := xblock_immediate( $<xblock>[$count].ast );
-            $past.op(~$<sym>[$count] ~~ /with/ ?? 'with' !! 'if');
+            if ~$<sym>[$count] ~~ /with/ {
+                $past := xblock_immediate_with( $<xblock>[$count].ast );
+                $past.op('with');
+            }
+            else {
+                $past := xblock_immediate( $<xblock>[$count].ast );
+                $past.op('if');
+            }
             $past.push($else);
         }
         make $past;
     }
 
     method statement_control:sym<unless>($/) {
-        my $past := xblock_immediate( $<xblock>.ast );
+        my $past := $<sym> eq 'without'
+            ?? xblock_immediate_with( $<xblock>.ast )
+            !! xblock_immediate( $<xblock>.ast );
+        $past.push(QAST::WVal.new( :value($*W.find_symbol(['Empty'])) ));
         $past.op(~$<sym>);
         make $past;
     }
@@ -1240,35 +1297,27 @@ Compilation unit '$file' contained the following violations:
 
     method statement_control:sym<for>($/) {
         my $xblock := $<xblock>.ast;
-        my $for-list-name := QAST::Node.unique('for-list');
-        my $iscont := QAST::Op.new(:op('iscont'), QAST::Var.new( :name($for-list-name), :scope('local') ));
-        $iscont.named('item');
-        my $call := QAST::Op.new(
-            :op<callmethod>, :name<map>, :node($/),
-            QAST::Var.new( :name($for-list-name), :scope('local') ),
-            block_closure($xblock[1]),
-            $iscont,
+        my $past := QAST::Want.new(
+            QAST::Op.new(
+                :op<p6for>, :node($/),
+                $xblock[0],
+                $xblock[1],
+            ),
+            'v', QAST::Op.new(
+                :op<p6for>, :node($/),
+                $xblock[0],
+                $xblock[1],
+            ),
         );
         if $*LABEL {
-            $call.push(QAST::WVal.new( :value($*W.find_symbol([$*LABEL])), :named('label') ));
+            my $label := QAST::WVal.new( :value($*W.find_symbol([$*LABEL])), :named('label') );
+            $past[0].push($label);
+            $past[2].push($label);
         }
-        my $bind := QAST::Op.new(
-            :op('bind'),
-            QAST::Var.new( :name($for-list-name), :scope('local'), :decl('var') ),
-            $xblock[0],
-        );
-        my $past := QAST::Want.new(
-            QAST::Stmts.new(
-                $bind,
-                QAST::Op.new( :op<callmethod>, :name<eager>, $call )
-            ),
-            'v', QAST::Stmts.new(
-                $bind,
-                QAST::Op.new( :op<callmethod>, :name<sink>, $call )
-            ),
-        );
-        my $sinkee := $past[0][1];
-        $past.annotate('statement_level', -> { $sinkee.name('sink') });
+        $past[0].annotate('context', 'eager');
+        $past[2].annotate('context', 'sink');
+        my $sinkee := $past[0];
+        $past.annotate('statement_level', -> { $sinkee.annotate('context', 'sink') });
         make $past;
     }
 
@@ -1428,6 +1477,7 @@ Compilation unit '$file' contained the following violations:
         my $xblock := $<xblock>.ast;
         my $sm_exp := $xblock.shift;
         my $pblock := $xblock.shift;
+        check_smartmatch($/,$sm_exp);
 
         # Handle the smart-match.
         my $match_past := QAST::Op.new( :op('callmethod'), :name('ACCEPTS'),
@@ -1775,9 +1825,11 @@ Compilation unit '$file' contained the following violations:
     }
 
     method statement_mod_cond:sym<when>($/) {
+        my $pat := $<modifier_expr>.ast;
+        check_smartmatch($/,$pat);
         make QAST::Op.new( :op<if>,
             QAST::Op.new( :name('ACCEPTS'), :op('callmethod'),
-                          $<modifier_expr>.ast,
+                          $pat,
                           QAST::Var.new( :name('$_'), :scope('lexical') ) ),
             :node($/)
         );
@@ -5718,6 +5770,12 @@ Compilation unit '$file' contained the following violations:
         $result
     }
 
+    sub check_smartmatch($/,$pat) {
+        if nqp::istype($pat,QAST::Op) && $pat.name eq '&infix:<=>' && $pat[1].name eq 'subst' {
+            $/.CURSOR.worry("Smartmatch with S/// can never succeed because the subsequent string match will fail");
+        }
+    }
+
     sub make_smartmatch($/, $negated) {
         my $lhs := $/[0].ast;
         my $rhs := $/[1].ast;
@@ -5727,6 +5785,7 @@ Compilation unit '$file' contained the following violations:
         my $old_topic_var := $lhs.unique('old_topic');
         my $result_var := $lhs.unique('sm_result');
         my $sm_call;
+        check_smartmatch($/,$rhs);
 
         # Call $rhs.ACCEPTS( $_ ), where $_ is $lhs.
         $sm_call := QAST::Op.new(
@@ -6840,11 +6899,14 @@ Compilation unit '$file' contained the following violations:
     }
 
     method quote:sym<s>($/) {
+        # We are emulating Str.subst/subst-mutate here, by calling match, assigning the result to
+        # a temporary variable etc.
+
         # Build the regex.
         my $rx_block := QAST::Block.new(QAST::Stmts.new, QAST::Stmts.new, :node($/));
         my %sig_info := hash(parameters => []);
         my $rx_coderef := regex_coderef($/, $*W.stub_code_object('Regex'),
-            $<sibble><left>.ast, 'anon', '', %sig_info, $rx_block, :use_outer_match(1)) if $<sibble><left>.ast;
+            $<sibble><left>.ast, 'anon', '', %sig_info, $rx_block, :use_outer_match(1));
 
         # Quote needs to be closure-i-fied.
         my $infixish := $<sibble><infixish>;
@@ -6863,30 +6925,133 @@ Compilation unit '$file' contained the following violations:
         }
         my $closure := block_closure(make_thunk_ref($right, $<sibble><right>));
 
-        # make $/ = $_.subst-mutate(...)
-        my $past := QAST::Op.new(
-            :node($/),
-            :op('callmethod'), :name($<sym> eq 'S' ?? 'subst' !! 'subst-mutate'),
+        # self.match($rx_coderef, |%options);
+        my $past := QAST::Op.new( :node($/), :op('callmethod'), :name('match'),
             QAST::Var.new( :name('$_'), :scope('lexical') ),
-            $rx_coderef, $closure
+            $rx_coderef
         );
         self.handle_and_check_adverbs($/, %SUBST_ALLOWED_ADVERBS, 'substitution', $past);
         if $/[0] {
             $past.push(QAST::IVal.new(:named('samespace'), :value(1)));
         }
-        $past.push(QAST::IVal.new(:named('SET_CALLER_DOLLAR_SLASH'), :value(1)));
 
-        $past := make QAST::Op.new(
-            :node($/),
-            :op('call'),
-            :name('&infix:<=>'),
-            QAST::Var.new(:name('$/'), :scope('lexical')),
-            $past
+        my $samecase := 0;
+        my $global   := 0;
+        for $<rx_adverbs>.ast {
+            if $_.named eq 'samecase' || $_.named eq 'ii' {
+                $samecase := 1;
+            }
+            elsif $_.named eq 'global' || $_.named eq 'g' {
+                $global := 1;
+            }
+        }
+
+        my $result        := $past.unique('subst_result');
+        my $global_result := $past.unique('subst_global_result');
+        my $List          := $*W.find_symbol(['List']);
+
+        my $apply_matches := QAST::Op.new( :op('callmethod'), :name('dispatch:<!>'),
+            QAST::Op.new( :op('callmethod'),  :name('Str'),
+                QAST::Var.new( :name('$_'), :scope('lexical') ) ),
+            QAST::SVal.new( :value('APPLY-MATCHES') ),
+            QAST::WVal.new( :value($*W.find_symbol(['Str'])) ),
+            QAST::Var.new( :name($result), :scope('local') ),
+            $closure,
+            QAST::Var.new( :name('$/'), :scope('lexical') ), # caller dollar slash
+            QAST::IVal.new( :value(1) ),                     # set dollar slash
+            QAST::IVal.new( :value($samecase) ),             # samecase
+            QAST::IVal.new( :value($/[0] ?? 1 !! 0) ),       # samespace
         );
 
-        $past.annotate('is_subst', 1);
-        $past
-}
+        make QAST::Op.new( :op('locallifetime'), :node($/),
+            QAST::Stmt.new(
+
+                # my $result;
+                QAST::Var.new( :name($result), :scope('local'), :decl('var') ),
+
+                # $result := self.match(...
+                QAST::Op.new( :op('bind'),
+                    QAST::Var.new( :name($result), :scope('local') ),
+                    $past
+                ),
+
+                # ($/,) = $result - We do this so the replacement closure can close
+                # over the current match.
+                QAST::Op.new( :op('p6store'),
+                    QAST::Op.new( :op('call'), :name('&infix:<,>'),
+                        QAST::Var.new( :name('$/'), :scope('lexical') ) ),
+                    QAST::Var.new( :name($result), :scope('local') ),
+                ),
+
+                # It matched something. Either a single item or a list of matches.
+                QAST::Op.new( :op('if'),
+                    QAST::Op.new( :op('unless'),# :name('&infix:<||>'),
+                        QAST::Op.new( :op('istype'),
+                            QAST::Var.new( :name($result), :scope('local') ),
+                            QAST::WVal.new( :value($*W.find_symbol(['Match'])) )
+                        ),
+                        QAST::Op.new( :op('if'),
+                            QAST::Op.new( :op('istype'),
+                                QAST::Var.new( :name($result), :scope('local') ),
+                                QAST::WVal.new( :value($*W.find_symbol(['Positional'])) )
+                            ),
+                            QAST::Op.new( :op('callmethod'), :name('elems'),
+                                QAST::Var.new( :name($result), :scope('local') )
+                            )
+                        )
+                    ),
+
+                    ($<sym> eq 's' ??
+                        # $_ = $_!APPLY-MATCHES()
+                        QAST::Op.new( :op('call'), :name('&infix:<=>'),
+                            QAST::Var.new( :name('$_'), :scope('lexical') ),
+                            $apply_matches
+                        ) !!
+                        # $_!APPLY-MATCHES()
+                        $apply_matches
+                    )
+                ),
+
+                # It will return a list of matches when we match globally, and a single
+                # match otherwise.
+                (
+                    $global ??
+                    QAST::Op.new( :op('p6store'),
+                        QAST::Var.new( :name('$/'), :scope('lexical') ),
+                        QAST::Stmts.new(
+                            QAST::Op.new( :op('bind'),
+                                QAST::Var.new( :name($global_result), :scope('local'), :decl('var') ),
+                                QAST::Op.new( :op('callmethod'), :name('CREATE'),
+                                    QAST::WVal.new( :value($List) )
+                                )
+                            ),
+                            QAST::Op.new( :op('bindattr'),
+                                QAST::Var.new( :name($global_result), :scope('local') ),
+                                QAST::WVal.new( :value($List) ),
+                                QAST::SVal.new( :value('$!reified') ),
+                                QAST::Op.new( :op('getattr'),
+                                    QAST::Var.new( :name($result), :scope('local') ),
+                                    QAST::WVal.new( :value($List) ),
+                                    QAST::SVal.new( :value('$!reified') )
+                                )
+                            ),
+                            QAST::Var.new( :name($global_result), :scope('local') )
+                        )
+                    ) !!
+                    QAST::Op.new( :op('p6store'),
+                        QAST::Op.new( :op('call'), :name('&infix:<,>'),
+                            QAST::Var.new( :name('$/'), :scope('lexical') ) ),
+                        QAST::Var.new( :name($result), :scope('local') )
+                    )
+                ),
+
+                # The result of this operation.
+                QAST::Var.new( :name('$/'), :scope('lexical') )
+            ),
+            $result,
+            $global_result,
+        );
+    }
 
     method quote:sym<quasi>($/) {
         my $ast_class := $*W.find_symbol(['AST']);
@@ -7581,17 +7746,6 @@ Compilation unit '$file' contained the following violations:
         $ref
     }
 
-    sub block_closure($code) {
-        my $closure := QAST::Op.new(
-            :op('callmethod'), :name('clone'),
-            $code
-        );
-        $closure := QAST::Op.new( :op('p6capturelex'), $closure);
-        $closure.annotate('past_block', $code.ann('past_block'));
-        $closure.annotate('code_object', $code.ann('code_object'));
-        $closure
-    }
-
     sub make_thunk_ref($to_thunk, $/) {
         my $block := $*W.push_lexpad($/);
         fatalize($to_thunk) if %*PRAGMAS<fatal>;
@@ -7636,6 +7790,7 @@ Compilation unit '$file' contained the following violations:
 
         # Build a block that'll smartmatch the topic against the
         # expression.
+        check_smartmatch($/,$expr);
         my $past := QAST::Block.new(
             QAST::Stmts.new(
                 QAST::Var.new( :name('$_'), :scope('lexical'), :decl('var') )

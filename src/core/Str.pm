@@ -502,12 +502,7 @@ my class Str does Stringy { # declared in BOOTSTRAP
             @matches := $matches.list;
         }
         if $multi {
-            if nqp::istype($pat, Regex) {
-                try $caller_dollar_slash = +@matches
-                    ?? @matches[ +@matches - 1 ]
-                    !! Cursor.'!cursor_init'(nqp::unbox_s('self')).'!cursor_start_cur'().MATCH;
-            }
-            $caller_dollar_slash = @matches;
+            try $caller_dollar_slash = @matches;
             @matches
         }
         else {
@@ -517,11 +512,10 @@ my class Str does Stringy { # declared in BOOTSTRAP
     }
 
     multi method subst-mutate($self is rw: $matcher, $replacement,
-                       :ii(:$samecase), :ss(:$samespace),
-                       :$SET_CALLER_DOLLAR_SLASH, *%options) {
+                       :ii(:$samecase), :ss(:$samespace), *%options) {
         my $global = %options<g> || %options<global>;
         my $caller_dollar_slash := nqp::getlexcaller('$/');
-        my $SET_DOLLAR_SLASH     = $SET_CALLER_DOLLAR_SLASH || nqp::istype($matcher, Regex);
+        my $SET_DOLLAR_SLASH     = nqp::istype($matcher, Regex);
 
         try $caller_dollar_slash = $/ if $SET_DOLLAR_SLASH;
         my @matches              = self.match($matcher, |%options);
@@ -560,10 +554,10 @@ my class Str does Stringy { # declared in BOOTSTRAP
     }
     multi method subst(Str:D: $matcher, $replacement,
                        :ii(:$samecase), :ss(:$samespace),
-                       :$SET_CALLER_DOLLAR_SLASH, *%options) {
+                       *%options) {
 
         my $caller_dollar_slash := nqp::getlexcaller('$/');
-        my $SET_DOLLAR_SLASH     = $SET_CALLER_DOLLAR_SLASH || nqp::istype($matcher, Regex);
+        my $SET_DOLLAR_SLASH     = nqp::istype($matcher, Regex);
 
         # nothing to do
         try $caller_dollar_slash = $/ if $SET_DOLLAR_SLASH;
@@ -796,7 +790,7 @@ my class Str does Stringy { # declared in BOOTSTRAP
                 if $m >= 0 and ($l = $l - 1) {
                     my \value = nqp::p6box_s(nqp::substr($self-string, $c, $m - $c));
                     $c = $m + $width;
-                    $all ?? (value, $match-string) !! value;
+                    $all ?? Slip.new(value, $match-string) !! value;
                 }
                 else {
                     $done = 1;
@@ -1378,8 +1372,8 @@ my class Str does Stringy { # declared in BOOTSTRAP
             }
             if $l<indent-chars> and $pos % $?TABSTOP {
                 my $check = $?TABSTOP - $pos % $?TABSTOP;
-                $check = $l<indent-chars>[0..^$check].first-index({$_.key eq "\t"});
-                if $check.defined {
+                $check = $l<indent-chars>[0..^$check].first(*.key eq "\t",:k);
+                with $check {
                     $l<indent-chars>.shift for 0..$check;
                     $pos -= $pos % $?TABSTOP;
                     $pos += $?TABSTOP;

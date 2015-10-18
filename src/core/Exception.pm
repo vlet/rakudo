@@ -1030,22 +1030,23 @@ my class X::Method::Private::Unqualified does X::Comp {
     }
 }
 
-my class X::Adverb::Slice is Exception {
+my class X::Adverb is Exception {
     has $.what;
+    has $.source;
     has @.unexpected;
     has @.nogo;
     method message {
         my $text = '';
         if @!unexpected.elems -> $elems {
             $text = $elems > 1
-              ?? "$elems unexpected adverbs (@!unexpected[])"
+              ?? "$elems unexpected adverbs (@!unexpected.sort())"
               !! "Unexpected adverb '@!unexpected[0]'"
         }
         if @!nogo {
             $text ~= $text ?? " and u" !! "U";
-            $text ~= "nsupported combination of adverbs (@!nogo[])";
+            $text ~= "nsupported combination of adverbs (@!nogo.sort())";
         }
-        $text ~ " passed to slice on $!what";
+        $text ~ " passed to $!what on $!source";
     }
 }
 

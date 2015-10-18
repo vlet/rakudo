@@ -1380,22 +1380,23 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
     proto rule statement_control { <...> }
 
     rule statement_control:sym<if> {
-        $<sym>=[if|with]<.kok>
-        <xblock>
+        $<sym>=[if|with]<.kok> {}
+        <xblock(so ~$<sym>[0] ~~ /with/)>
         [
             [
             | 'else'\h*'if' <.typed_panic: 'X::Syntax::Malformed::Elsif'>
             | 'elif' { $/.CURSOR.typed_panic('X::Syntax::Malformed::Elsif', what => "elif") }
             | $<sym>='elsif' <xblock>
-            | $<sym>='orwith' <xblock>
+            | $<sym>='orwith' <xblock(1)>
             ]
         ]*
-        [ 'else' <else=.pblock> ]?
+        {}
+        [ 'else' <else=.pblock(so ~$<sym>[-1] ~~ /with/)> ]?
     }
 
     rule statement_control:sym<unless> {
         $<sym>=[unless|without]<.kok> {}
-        <xblock>
+        <xblock($<sym> eq 'without')>
         [ <!before [els[e|if]|orwith]» > || <.typed_panic: 'X::Syntax::UnlessElse'> ]
     }
 
@@ -1508,7 +1509,7 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
         | <version> [
                     ||  <?{ $<version><vnum>[0] == 5 }> {
                             my $module := $*W.load_module($/, 'Perl5', {}, $*GLOBALish);
-                            do_import($/, $module, 'Perl5');
+                            $*W.do_import($/, $module, 'Perl5');
                             $/.CURSOR.import_EXPORTHOW($/, $module);
                         }
                     ||  <?{ $<version><vnum>[0] == 6 }> {

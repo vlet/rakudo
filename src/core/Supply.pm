@@ -25,7 +25,8 @@ my role Supply {
     has $!been_tapped;
     has @!paused;
 
-    method tap(Supply:D: &emit = -> $ { }, :&done,:&quit={die $_},:&closing) {
+    method tap(Supply:D:
+    &emit = -> $ { }, :&done,:&quit={die $_},:&closing) {
         my $tap = Tap.new(:&emit, :&done, :&quit, :&closing, :supply(self));
         $!tappers_lock.protect({
             @!tappers.push($tap);
@@ -119,14 +120,14 @@ my role Supply {
         $p
     }
 
-    method wait(Supply:D:) {
+    method await(Supply:D:) {
         my $l = Lock.new;
         my $p = Promise.new;
         my $t = self.tap( -> \val {},
           done => {
               $l.protect( {
                   if $p.status == Planned {
-                      $p.keep(True);
+                      $p.keep(self);
                       $t.close()
                   }
               } );
@@ -140,8 +141,10 @@ my role Supply {
               } );
           },
         );
-        $p.result
+        $p
     }
+
+    method wait(Supply:D:) { self.await.result }
 
     method list(Supply:D:) {
         # Use a Channel to handle any asynchrony.
@@ -209,8 +212,8 @@ my role Supply {
                               my $now := now;
                               $target = &as(val);
                               my $index =
-                                @seen.first-index({&with($target,$_[0])});
-                              if $index.defined {
+                                @seen.first({&with($target,$_[0])},:k);
+                              with $index {
                                   if $now > @seen[$index][1] {  # expired
                                       @seen[$index][1] = $now+$expires;
                                       $res.emit(val);
@@ -224,8 +227,8 @@ my role Supply {
                           !! -> \val {
                               my $now := now;
                               my $index =
-                                @seen.first-index({&with(val,$_[0])});
-                              if $index.defined {
+                                @seen.first({&with(val,$_[0])},:k);
+                              with $index {
                                   if $now > @seen[$index][1] {  # expired
                                       @seen[$index][1] = $now+$expires;
                                       $res.emit(val);
@@ -307,20 +310,22 @@ my role Supply {
     method squish(Supply:D $self: :&as, :&with is copy) {
         &with //= &[===];
         on -> $res {
-            my @secret;
             $self => do {
-                my Mu $last = @secret;
+                my int $first = 1;
+                my Mu $last;
                 my Mu $target;
                 &as
                   ?? -> \val {
                       $target = &as(val);
-                      unless &with($target,$last) {
-                          $last = $target;
+                      if $first || !&with($target,$last) {
+                          $first = 0;
+                          $last  = $target;
                           $res.emit(val);
                       }
                   }
                   !! -> \val {
-                      unless &with(val,$last) {
+                      if $first || !&with(val,$last) {
+                          $first = 0;
                           $last = val;
                           $res.emit(val);
                       }
@@ -788,6 +793,176 @@ my role Supply {
                 done => { $res.done() if ++$dones == +@s }
                 }
             }
+        }
+    }
+
+    proto method throttle(|) { * }
+    multi method throttle(Supply:D $self:
+      Int()  $elems,
+      Real() $seconds,
+      Real() $delay  = 0,
+      :$scheduler    = $*SCHEDULER,
+      :$control,
+      :$status,
+      :$bleed,
+    ) {
+        my $timer = Supply.interval($seconds,$delay,:$scheduler);
+        my @buffer;
+        my int $limit   = $elems;
+        my int $allowed = $limit;
+        my int $emitted;
+        my int $bled;
+        sub emit-status($id) {
+           $status.emit(
+             { :$allowed, :$bled, :buffered(+@buffer),
+               :$emitted, :$id,   :$limit } );
+        }
+        on -> $res {
+            $timer => { 
+                emit => -> \tick {
+                    if +@buffer -> \buffered {
+                        my int $todo = buffered > $limit ?? $limit !! buffered;
+                        $res.emit(@buffer.shift) for ^$todo;
+                        $emitted = $emitted + $todo;
+                        $allowed = $limit   - $todo;
+                    }
+                    else {
+                        $allowed = $limit;
+                    }
+                },
+            },
+            $self => {
+                emit => -> \val {
+                    if $allowed {
+                        $res.emit(val);
+                        $emitted = $emitted + 1;
+                        $allowed = $allowed - 1;
+                    }
+                    else {
+                        @buffer.push(val);
+                    }
+                },
+                done => {
+                    $res.done;  # also stops the timer ??
+                    $control.done if $control;
+                    $status.done  if $status;
+                    if $status {
+                        emit-status("done");
+                        $status.done;
+                    }
+                    if $bleed && @buffer {
+                        $bleed.emit(@buffer.shift) while @buffer;
+                        $bleed.done;
+                    }
+                },
+            },
+            $control
+              ?? ($control => {
+                   emit => -> \val {
+                       my $type  = val.key;
+                       my $value = val.value;
+
+                       if $type eq 'limit' {
+                           my int $extra = $value - $limit;
+                           $allowed = $extra > 0 || $allowed + $extra >= 0
+                             ?? $allowed + $extra
+                             !! 0;
+                           $limit = $value;
+                       }
+                       elsif $type eq 'bleed' && $bleed {
+                           my int $todo = $value min +@buffer;
+                           $bleed.emit(@buffer.shift) for ^$todo;
+                           $bled = $bled + $todo;
+                       }
+                       elsif $type eq 'status' && $status {
+                           emit-status($value);
+                       }
+                   },
+                 })
+              !! |()
+        }
+    }
+    multi method throttle(Supply:D $self:
+      Int()  $elems,
+      Callable:D $process,
+      Real() $delay = 0,
+      :$scheduler   = $*SCHEDULER,
+      :$control,
+      :$status,
+      :$bleed,
+    ) {
+        sleep $delay if $delay;
+        my @buffer;
+        my int $limit   = $elems;
+        my int $allowed = $limit;
+        my int $running;
+        my int $emitted;
+        my int $bled;
+        my int $done;
+        my $ready = Supply.new;
+        sub start-process(\val) {
+            my $p = Promise.start( $process, :$scheduler, val );
+            $running = $running + 1;
+            $allowed = $allowed - 1;
+            $p.then: { $ready.emit($p) };
+        }
+        sub emit-status($id) {
+           $status.emit(
+             { :$allowed, :$bled, :buffered(+@buffer),
+               :$emitted, :$id,   :$limit, :$running } );
+        }
+        on -> $res {
+            $self => {
+                emit => -> \val {
+                    $allowed > 0 ?? start-process(val) !! @buffer.push(val);
+                },
+                done => {
+                    $done = 1;
+                },
+            },
+            $ready => {  # when a process is ready
+                emit => -> \val {
+                    $running = $running - 1;
+                    $allowed = $allowed + 1;
+                    $res.emit(val);
+                    $emitted = $emitted + 1;
+                    start-process(@buffer.shift) if $allowed > 0 && @buffer;
+
+                    if $done && !$running {
+                        $control.done if $control;
+                        if $status {
+                            emit-status("done");
+                            $status.done;
+                        }
+                        if $bleed && @buffer {
+                            $bleed.emit(@buffer.shift) while @buffer;
+                            $bleed.done;
+                        }
+                        $res.done;
+                    }
+                },
+            },
+            $control
+              ?? ($control => {
+                   emit => -> \val {
+                       my $type  = val.key;
+                       my $value = val.value;
+
+                       if $type eq 'limit' {
+                           $allowed = $allowed + $value - $limit;
+                           $limit   = $value;
+                       }
+                       elsif $type eq 'bleed' && $bleed {
+                           my int $todo = $value min +@buffer;
+                           $bleed.emit(@buffer.shift) for ^$todo;
+                           $bled = $bled + $todo;
+                       }
+                       elsif $type eq 'status' && $status {
+                           emit-status($value);
+                       }
+                   },
+                 })
+              !! |()
         }
     }
 }

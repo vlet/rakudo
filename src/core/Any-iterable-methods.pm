@@ -17,7 +17,7 @@ augment class Any {
         }
     }
 
-    proto method map(|) { * }
+    proto method map(|) is nodal { * }
 
     multi method map(\SELF: &block;; :$label, :$item) {
         sequential-map(as-iterable($item ?? (SELF,) !! SELF).iterator, &block, :$label);
@@ -305,6 +305,159 @@ augment class Any {
         self.map(&block, :$label).flat
     }
 
+    method !grep-k(Callable:D $test) {
+        Seq.new(class :: does Iterator {
+            has  Mu $!iter;
+            has  Mu $!test;
+            has int $!index;
+            method BUILD(\list,Mu \test) {
+                $!iter  = as-iterable(list).iterator;
+                $!test := test;
+                $!index = -1;
+                self
+            }
+            method new(\list,Mu \test) { nqp::create(self).BUILD(list,test) }
+            method pull-one() is raw {
+                $!index = $!index + 1
+                  until ($_ := $!iter.pull-one) =:= IterationEnd || $!test($_);
+                $_ =:= IterationEnd
+                  ?? IterationEnd
+                  !! nqp::p6box_i($!index = $!index + 1)
+            }
+            method push-exactly($target, int $n) {
+                my int $done;
+                while $done < $n {
+                    return IterationEnd
+                      if IterationEnd =:= ($_ := $!iter.pull-one);
+                    $!index = $!index + 1;
+                    if $!test($_) {
+                        $target.push(nqp::p6box_i($!index));
+                        $done = $done + 1;
+                    }
+                }
+                $done
+            }
+            method push-all($target) {
+                until ($_ := $!iter.pull-one) =:= IterationEnd {
+                    $!index = $!index + 1;
+                    $target.push(nqp::p6box_i($!index)) if $!test($_);
+                }
+                IterationEnd
+            }
+        }.new(self, $test))
+    }
+    method !grep-kv(Callable:D $test) {
+        Seq.new(class :: does Iterator {
+            has  Mu $!iter;
+            has  Mu $!test;
+            has int $!index;
+            has Mu $!value;
+            method BUILD(\list,Mu \test) {
+                $!iter  = as-iterable(list).iterator;
+                $!test := test;
+                $!index = -1;
+                self
+            }
+            method new(\list,Mu \test) { nqp::create(self).BUILD(list,test) }
+            method pull-one() is raw {
+                if $!value.DEFINITE {
+                    my \tmp  = $!value;
+                    $!value := Mu;
+                    tmp
+                }
+                else {
+                    $!index = $!index + 1
+                      until ($_ := $!iter.pull-one) =:= IterationEnd
+                        || $!test($_);
+                    if $_ =:= IterationEnd {
+                        IterationEnd;
+                    }
+                    else {
+                        $!value := $_;
+                        nqp::p6box_i($!index = $!index + 1)
+                    }
+                }
+            }
+            method push-exactly($target, int $n) {
+                my int $done;
+                my $no-sink;
+                if $!value.DEFINITE {
+                    $no-sink := $target.push($!value);
+                    $!value  := Mu;
+                    $done = $done + 1;
+                }
+                while $done < $n {
+                    return IterationEnd
+                      if IterationEnd =:= ($_ := $!iter.pull-one);
+                    $!index = $!index + 1;
+                    if $!test($_) {
+                        $target.push(nqp::p6box_i($!index));
+                        if ($done = $done + 1) < $n {
+                            $no-sink := $target.push($_);
+                            $done = $done + 1;
+                        }
+                        else {
+                            $!value := $_;
+                        }
+                    }
+                }
+                $done
+            }
+            method push-all($target) {
+                my $no-sink;
+                until ($_ := $!iter.pull-one) =:= IterationEnd {
+                    $!index = $!index + 1;
+                    if $!test($_) {
+                        $target.push(nqp::p6box_i($!index));
+                        $no-sink := $target.push($_);
+                    }
+                }
+                IterationEnd
+            }
+        }.new(self, $test))
+    }
+    method !grep-p(Callable:D $test) {
+        Seq.new(class :: does Iterator {
+            has  Mu $!iter;
+            has  Mu $!test;
+            has int $!index;
+            method BUILD(\list,Mu \test) {
+                $!iter  = as-iterable(list).iterator;
+                $!test := test;
+                $!index = -1;
+                self
+            }
+            method new(\list,Mu \test) { nqp::create(self).BUILD(list,test) }
+            method pull-one() is raw {
+                $!index = $!index + 1
+                  until ($_ := $!iter.pull-one) =:= IterationEnd || $!test($_);
+                $_ =:= IterationEnd
+                  ?? IterationEnd
+                  !! Pair.new($!index = $!index + 1,$_)
+            }
+            method push-exactly($target, int $n) {
+                my int $done;
+                while $done < $n {
+                    return IterationEnd
+                      if IterationEnd =:= ($_ := $!iter.pull-one);
+                    $!index = $!index + 1;
+                    if $!test($_) {
+                        $target.push(Pair.new($!index,$_));
+                        $done = $done + 1;
+                    }
+                }
+                $done
+            }
+            method push-all($target) {
+                until ($_ := $!iter.pull-one) =:= IterationEnd {
+                    $!index = $!index + 1;
+                    $target.push(Pair.new($!index,$_)) if $!test($_);
+                }
+                IterationEnd
+            }
+        }.new(self, $test))
+    }
+
     role Grepper does Iterator {
         has Mu $!iter;
         has Mu $!test;
@@ -315,78 +468,66 @@ augment class Any {
         }
         method new(\list,Mu \test) { nqp::create(self).BUILD(list,test) }
     }
-
-    proto method grep(|) is nodal { * }
-    multi method grep(Bool:D $t) {
-        fail X::Match::Bool.new( type => '.grep' );
-    }
-    multi method grep(Regex:D $test) {
+    method !grep-regex(Regex:D $test) {
         Seq.new(class :: does Grepper {
             method pull-one() is raw {
-                my Mu $value;
-                1 until ($value := $!iter.pull-one) =:= IterationEnd
-                  || $value.match($!test);
-                $value
+                1 until ($_ := $!iter.pull-one) =:= IterationEnd
+                  || $_.match($!test);
+                $_
             }
             method push-exactly($target, int $n) {
-                my Mu $value;
                 my int $done;
                 my $no-sink;
                 while $done < $n {
                     return IterationEnd
-                      if IterationEnd =:= ($value := $!iter.pull-one);
-                    if $value.match($!test) {
-                        $no-sink := $target.push($value);
+                      if IterationEnd =:= ($_ := $!iter.pull-one);
+                    if $_.match($!test) {
+                        $no-sink := $target.push($_);
                         $done = $done + 1;
                     }
                 }
                 $done
             }
             method push-all($target) {
-                my Mu $value;
                 my $no-sink;
-                $no-sink := $target.push($value) if $value.match($!test)
-                  until ($value := $!iter.pull-one) =:= IterationEnd;
+                $no-sink := $target.push($_) if $_.match($!test)
+                  until ($_ := $!iter.pull-one) =:= IterationEnd;
                 IterationEnd
             }
         }.new(self, $test))
     }
-    multi method grep(Callable:D $test) {
+    method !grep-callable(Callable:D $test) {
         if ($test.count == 1) {
             $test.?has-phasers
               ?? self.map({ next unless $test($_); $_ })  # cannot go fast
               !! Seq.new(class :: does Grepper {
                      method pull-one() is raw {
-                         my Mu $value;
-                         1 until ($value := $!iter.pull-one) =:= IterationEnd
-                           || $!test($value);
-                         $value
+                         1 until ($_ := $!iter.pull-one) =:= IterationEnd
+                           || $!test($_);
+                         $_
                      }
                      method push-exactly($target, int $n) {
-                         my Mu $value;
                          my int $done;
                          my $no-sink;
                          while $done < $n {
                              return IterationEnd
-                               if IterationEnd =:= ($value := $!iter.pull-one);
-                             if $!test($value) {
-                                 $no-sink := $target.push($value);
+                               if IterationEnd =:= ($_ := $!iter.pull-one);
+                             if $!test($_) {
+                                 $no-sink := $target.push($_);
                                  $done = $done + 1;
                              }
                          }
                          $done
                      }
                      method push-all($target) {
-                         my Mu $value;
                          my $no-sink;
-                         $no-sink := $target.push($value) if $!test($value)
-                           until ($value := $!iter.pull-one) =:= IterationEnd;
+                         $no-sink := $target.push($_) if $!test($_)
+                           until ($_ := $!iter.pull-one) =:= IterationEnd;
                          IterationEnd
                      }
                      method sink-all() {
-                         my Mu $value;
-                         $!test($value)
-                           until ($value := $!iter.pull-one) =:= IterationEnd;
+                         $!test($_)
+                           until ($_ := $!iter.pull-one) =:= IterationEnd;
                          IterationEnd
                      }
                  }.new(self, $test))
@@ -415,149 +556,202 @@ augment class Any {
             self.map(&tester);
         }
     }
-    multi method grep(Mu $test) {
+    method !grep-accepts(Mu $test) {
         Seq.new(class :: does Grepper {
             method pull-one() is raw {
-                my Mu $value;
-                1 until ($value := $!iter.pull-one) =:= IterationEnd
-                  || $!test.ACCEPTS($value);
-                $value
+                1 until ($_ := $!iter.pull-one) =:= IterationEnd
+                  || $!test.ACCEPTS($_);
+                $_
             }
             method push-exactly($target, int $n) {
-                my Mu $value;
                 my int $done;
                 my $no-sink;
                 while $done < $n {
                     return IterationEnd
-                      if IterationEnd =:= ($value := $!iter.pull-one);
-                    if $!test.ACCEPTS($value) {
-                        $no-sink := $target.push($value);
+                      if IterationEnd =:= ($_ := $!iter.pull-one);
+                    if $!test.ACCEPTS($_) {
+                        $no-sink := $target.push($_);
                         $done = $done + 1;
                     }
                 }
                 $done
             }
             method push-all($target) {
-                my Mu $value;
                 my $no-sink;
-                $no-sink := $target.push($value) if $!test.ACCEPTS($value)
-                  until ($value := $!iter.pull-one) =:= IterationEnd;
+                $no-sink := $target.push($_) if $!test.ACCEPTS($_)
+                  until ($_ := $!iter.pull-one) =:= IterationEnd;
                 IterationEnd
             }
         }.new(self, $test))
     }
 
-    proto method grep-index(|) is nodal { * }
-    multi method grep-index(Bool:D $t) {
-        fail X::Match::Bool.new( type => '.grep-index' );
+    method !index-result(\index,\value,$what,%a) is raw {
+        if %a {
+            if %a == 1 {
+                if %a<k> {
+                    nqp::p6box_i(index)
+                }
+                elsif %a<p> {
+                    Pair.new(index,value)
+                }
+                elsif %a<v> {
+                    value
+                }
+                else {
+                    fail X::Adverb.new(
+                      :$what,
+                      :source(try { self.VAR.name } // self.WHAT.perl),
+                      :unexpected(%a.keys))
+                }
+            }
+            else {
+                fail X::Adverb.new(
+                  :$what,
+                  :source(try { self.VAR.name } // self.WHAT.perl),
+                  :nogo(%a.keys.grep: /k|v|p/)
+                  :unexpected(%a.keys.grep: { !.match(/k|v|p/) } ))
+            }
+        }
+        else {
+            value
+        }
     }
-    multi method grep-index(Regex:D $test) {
-        my int $index = -1;
-        self.map: {
-            $index = $index+1;
-            next unless .match($test);
-            nqp::box_i($index,Int);
-        };
+
+    proto method grep(|) is nodal { * }
+    multi method grep(Bool:D $t) {
+        fail X::Match::Bool.new( type => '.grep' );
     }
-    multi method grep-index(Callable:D $test) {
-        my int $index = -1;
-        self.map: {
-            $index = $index + 1;
-            next unless $test($_);
-            nqp::box_i($index,Int);
-        };
-    }
-    multi method grep-index(Mu $test) {
-        my int $index = -1;
-        self.map: {
-            $index = $index + 1;
-            next unless $_ ~~ $test;
-            nqp::box_i($index,Int);
-        };
+    multi method grep(Mu $t) {
+        if %_ == 0 {
+            nqp::istype($t,Regex:D)
+              ?? self!grep-regex: $t
+              !! nqp::istype($t,Callable:D)
+                   ?? self!grep-callable: $t
+                   !! self!grep-accepts: $t
+        }
+        elsif %_ == 1 {
+            if %_<k> {
+                nqp::istype($t,Regex:D)
+                  ?? self!grep-k: { $_.match($t) }
+                  !! nqp::istype($t,Callable:D)
+                       ?? self!grep-k: $t
+                       !! self!grep-k: { $t.ACCEPTS($_) }
+            }
+            elsif %_<kv> {
+                nqp::istype($t,Regex:D)
+                  ?? self!grep-kv: { $_.match($t) }
+                  !! nqp::istype($t,Callable:D)
+                       ?? self!grep-kv: $t
+                       !! self!grep-kv: { $t.ACCEPTS($_) }
+            }
+            elsif %_<p> {
+                nqp::istype($t,Regex:D)
+                  ?? self!grep-p: { $_.match($t) }
+                  !! nqp::istype($t,Callable:D)
+                       ?? self!grep-p: $t
+                       !! self!grep-p: { $t.ACCEPTS($_) }
+            }
+            elsif %_<v> {
+                nqp::istype($t,Regex:D)
+                  ?? self!grep-regex: $t
+                  !! nqp::istype($t,Callable:D)
+                       ?? self!grep-callable: $t
+                       !! self!grep-accepts: $t
+            }
+            else {
+                my ($k) = %_.keys;
+                if $k eq 'k' || $k eq 'kv' || $k eq 'p' {
+                    nqp::istype($t,Regex:D)
+                      ?? self!grep-regex: $t
+                      !! nqp::istype($t,Callable:D)
+                           ?? self!grep-callable: $t
+                           !! self!grep-accepts: $t
+                }
+                else {
+                    $k eq 'v'
+                      ?? fail "Doesn't make sense to specify a negated :v adverb"
+                      !! fail X::Adverb.new(
+                           :what<grep>,
+                           :source(try { self.VAR.name } // self.WHAT.perl),
+                           :unexpected($k))
+                }
+            }
+        }
+        else {
+            fail X::Adverb.new(
+              :what<grep>,
+              :source(try { self.VAR.name } // self.WHAT.perl),
+              :nogo(%_.keys.grep: /k|v|kv|p/)
+              :unexpected(%_.keys.grep: { !.match(/k|v|kv|p/) } ))
+        }
     }
 
     proto method first(|) is nodal { * }
     multi method first(Bool:D $t) {
         fail X::Match::Bool.new( type => '.first' );
     }
-    multi method first(Regex:D $test) is raw {
-        self.map({ return-rw $_ if .match($test) });
-        Nil;
-    }
-    multi method first(Callable:D $test) is raw {
-        self.map({ return-rw $_ if $test($_) });
-        Nil;
-    }
-    multi method first(Mu $test) is raw {
-        self.map({ return-rw $_ if $_ ~~ $test });
-        Nil;
-    }
-
-    proto method first-index(|) is nodal { * }
-    multi method first-index(Bool:D $t) {
-        fail X::Match::Bool.new( type => '.first-index' );
-    }
-    multi method first-index(Regex:D $test) {
-        my int $index = -1;
-        self.map: {
-            $index = $index + 1;
-            return nqp::box_i($index,Int) if .match($test);
-        };
-        Nil;
-    }
-    multi method first-index(Callable:D $test) {
-        my int $index = -1;
-        self.map: {
-            $index = $index + 1;
-            return nqp::box_i($index,Int) if $test($_);
-        };
-        Nil;
-    }
-    multi method first-index(Mu $test) {
-        my int $index = -1;
-        self.map: {
-            $index = $index + 1;
-            return nqp::box_i($index,Int) if $_ ~~ $test;
-        };
-        Nil;
-    }
-
-    proto method last-index(|) is nodal { * }
-    multi method last-index(Bool:D $t) {
-        fail X::Match::Bool.new( type => '.last-index' );
-    }
-    multi method last-index(Regex:D $test) {
-        my $elems = self.elems;
-        return Inf if $elems == Inf;
-
-        my int $index = $elems;
-        while $index {
-            $index = $index - 1;
-            return nqp::box_i($index,Int) if self.AT-POS($index).match($test);
+    multi method first(Regex:D $test, :$end, *%a) is raw {
+        if $end {
+            my $elems = self.elems;
+            if $elems && !($elems == Inf) {
+                my int $index = $elems;
+                return self!index-result($index,$_,'first :end',%a)
+                  if ($_ := self.AT-POS($index)).match($test)
+                    while $index--;
+            }
+            Nil
         }
-        Nil;
-    }
-    multi method last-index(Callable:D $test) {
-        my $elems = self.elems;
-        return Inf if $elems == Inf;
-
-        my int $index = $elems;
-        while $index {
-            $index = $index - 1;
-            return nqp::box_i($index,Int) if $test(self.AT-POS($index));
+        else {
+            my $iter := as-iterable(self).iterator;
+            my int $index;
+            $index = $index + 1
+              until ($_ := $iter.pull-one) =:= IterationEnd || .match($test);
+            $_ =:= IterationEnd
+              ?? Nil
+              !! self!index-result($index,$_,'first',%a)
         }
-        Nil;
     }
-    multi method last-index(Mu $test) {
-        my $elems = self.elems;
-        return Inf if $elems == Inf;
-
-        my int $index = $elems;
-        while $index {
-            $index = $index - 1;
-            return nqp::box_i($index,Int) if self.AT-POS($index) ~~ $test;
+    multi method first(Callable:D $test, :$end, *%a is copy) is raw {
+        if $end {
+            my $elems = self.elems;
+            if $elems && !($elems == Inf) {
+                my int $index = $elems;
+                return self!index-result($index,$_,'first :end',%a)
+                  if $test($_ := self.AT-POS($index))
+                    while $index--;
+            }
+            Nil
         }
-        Nil;
+        else {
+            my $iter := as-iterable(self).iterator;
+            my int $index;
+            $index = $index + 1
+              until ($_ := $iter.pull-one) =:= IterationEnd || $test($_);
+            $_ =:= IterationEnd
+              ?? Nil
+              !! self!index-result($index,$_,'first',%a)
+        }
+    }
+    multi method first(Mu $test, :$end, *%a) is raw {
+        if $end {
+            my $elems = self.elems;
+            if $elems && !($elems == Inf) {
+                my int $index = $elems;
+                return self!index-result($index,$_,'first :end',%a)
+                  if $test.ACCEPTS($_ := self.AT-POS($index))
+                    while $index--;
+            }
+            Nil
+        }
+        else {
+            my $iter := as-iterable(self).iterator;
+            my int $index;
+            $index = $index + 1
+              until (($_ := $iter.pull-one) =:= IterationEnd) || $test.ACCEPTS($_);
+            $_ =:= IterationEnd
+              ?? Nil
+              !! self!index-result($index,$_,'first',%a)
+        }
     }
 
     method !first-concrete(\i,\todo,\found) {
@@ -1152,6 +1346,41 @@ augment class Any {
             }
         }
     }
+
+    proto method grep-index(|) is nodal { * }
+    multi method grep-index(Bool:D $t) {
+        fail X::Match::Bool.new( type => '.grep-index' );
+    }
+    multi method grep-index(Regex:D \t) {
+        DEPRECATED('grep(:k)');
+        self!grep-k({$_.match(t)})
+    }
+    multi method grep-index(Callable:D \t) {
+        DEPRECATED('grep(:k)');
+        self!grep-k(t)
+    }
+    multi method grep-index(Mu \t) {
+        DEPRECATED('grep(:k)');
+        self!grep-k({t.ACCEPTS($_)})
+    }
+
+    proto method first-index(|) is nodal { * }
+    multi method first-index(Bool:D $ ) {
+        fail X::Match::Bool.new( type => '.first-index' );
+    }
+    multi method first-index(Mu \test) {
+        DEPRECATED('first(:k)');
+        self.first(test,:k)
+    }
+
+    proto method last-index(|) is nodal { * }
+    multi method last-index(Bool:D $ ) {
+        fail X::Match::Bool.new( type => '.last-index' );
+    }
+    multi method last-index(Mu \test) {
+        DEPRECATED('first(:end,:k)');
+        self.first(test,:end,:k)
+    }
 }
 
 BEGIN Attribute.^compose;
@@ -1178,29 +1407,17 @@ proto sub map(|) {*}
 multi sub map(&code, +values) { my $laze = values.is-lazy; values.map(&code).lazy-if($laze) }
 
 proto sub grep(|) {*}
-multi sub grep(Mu $test, +values) { my $laze = values.is-lazy; values.grep($test).lazy-if($laze) }
+multi sub grep(Mu $test, +values, *%a) {
+    my $laze = values.is-lazy;
+    values.grep($test,|%a).lazy-if($laze)
+}
 multi sub grep(Bool:D $t, |) { fail X::Match::Bool.new( type => 'grep' ) }
 
-proto sub grep-index(|) {*}
-multi sub grep-index(Mu $test, +values) { my $laze = values.is-lazy; values.grep-index($test).lazy-if($laze) }
-multi sub grep-index(Bool:D $t, |) {
-    fail X::Match::Bool.new(type => 'grep-index');
-}
-
 proto sub first(|) {*}
-multi sub first(Mu $test, +values) { my $laze = values.is-lazy; values.first($test).lazy-if($laze) }
 multi sub first(Bool:D $t, |) { fail X::Match::Bool.new( type => 'first' ) }
-
-proto sub first-index(|) {*}
-multi sub first-index(Mu $test, +values) { my $laze = values.is-lazy; values.first-index($test).lazy-if($laze) }
-multi sub first-index(Bool:D $t,|) {
-    fail X::Match::Bool.new(type => 'first-index');
-}
-
-proto sub last-index(|) {*}
-multi sub last-index(Mu $test, +values) { my $laze = values.is-lazy; values.last-index($test).lazy-if($laze) }
-multi sub last-index(Bool:D $t, |) {
-    fail X::Match::Bool.new(type => 'last-index');
+multi sub first(Mu $test, +values, *%a) {
+    my $laze = values.is-lazy;
+    values.first($test,|%a).lazy-if($laze)
 }
 
 proto sub join(|) { * }
@@ -1220,6 +1437,36 @@ multi sub sort($cmp, +values)      {
     nqp::istype($cmp, Callable)
         ?? values.sort($cmp)
         !! (|$cmp,|values).sort;
+}
+
+proto sub grep-index(|) {*}
+multi sub grep-index(Bool:D $t, |) {
+    fail X::Match::Bool.new(type => 'grep-index');
+}
+multi sub grep-index(Mu $test, +values) {
+    DEPRECATED('grep(:k)');
+    my $laze = values.is-lazy;
+    values.grep($test,:k).lazy-if($laze)
+}
+
+proto sub first-index(|) {*}
+multi sub first-index(Bool:D $ , |) {
+    fail X::Match::Bool.new(type => 'first-index');
+}
+multi sub first-index(Mu $test, +values) {
+    DEPRECATED('first(:k)');
+    my $laze = values.is-lazy;
+    values.first($test,:k).lazy-if($laze)
+}
+
+proto sub last-index(|) {*}
+multi sub last-index(Bool:D $ , |) {
+    fail X::Match::Bool.new(type => 'last-index');
+}
+multi sub last-index(Mu $test, +values) {
+    DEPRECATED('first(:end,:k)');
+    my $laze = values.is-lazy;
+    values.first($test,:end,:k).lazy-if($laze)
 }
 
 # vim: ft=perl6 expandtab sw=4
