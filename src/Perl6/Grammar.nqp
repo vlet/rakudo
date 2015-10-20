@@ -443,7 +443,7 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
         ||  <?before '(' | <alpha> >
             [
             | <identifier>
-            | :dba('indirect name') '(' ~ ')' <EXPR>
+            | :dba('indirect name') '(' ~ ')' [ <.ws> <EXPR> ]
             ]
         || <?before '::'> <.typed_panic: "X::Syntax::Name::Null">
         || $<bad>=[<.sigil><.identifier>] { my $b := $<bad>; self.malformed("lookup of ::$b; please use ::('$b'), ::\{'$b'\}, or ::<$b>") }
@@ -4989,6 +4989,7 @@ grammar Perl6::RegexGrammar is QRegex::P6Regex::Grammar does STD does CursorPack
     method throw_unspace($char) { self.typed_sorry('X::Syntax::Regex::Unspace', :$char) }
     method throw_regex_not_terminated() { self.typed_sorry('X::Syntax::Regex::Unterminated') }
     method throw_spaces_in_bare_range() { self.typed_sorry('X::Syntax::Regex::SpacesInBareRange') }
+    method throw_non_quantifiable() { self.typed_sorry('X::Syntax::Regex::NonQuantifiable') }
     method throw_solitary_quantifier() { self.typed_sorry('X::Syntax::Regex::SolitaryQuantifier') }
     method throw_solitary_backtrack_control() { self.typed_sorry('X::Syntax::Regex::SolitaryBacktrackControl') }
 

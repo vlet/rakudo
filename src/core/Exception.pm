@@ -1400,6 +1400,10 @@ my class X::Syntax::Regex::SolitaryQuantifier does X::Syntax {
     method message { 'Quantifier quantifies nothing' }
 }
 
+my class X::Syntax::Regex::NonQuantifiable does X::Syntax {
+    method message { 'Can only quantify a construct that produces a match' }
+}
+
 my class X::Syntax::Regex::SolitaryBacktrackControl does X::Syntax {
     method message { "Backtrack control ':' does not seem to have a preceding atom to control" }
 }
@@ -1732,8 +1736,8 @@ my class X::TypeCheck::Assignment is X::TypeCheck {
     has $.symbol;
     method operation { 'assignment' }
     method message {
-        self.priors() ~
-        $.symbol.defined && $.symbol ne '$'
+        self.priors() ~ do
+            $.symbol.defined && $.symbol ne '$'
             ?? "Type check failed in assignment to $.symbol; expected $.expectedn but got $.gotn"
             !! "Type check failed in assignment; expected $.expectedn but got $.gotn";
     }
