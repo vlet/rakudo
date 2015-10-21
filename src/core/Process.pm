@@ -36,6 +36,10 @@ multi sub INITIALIZE_DYNAMIC('$*TMPDIR') {
     PROCESS::<$TMPDIR> := $*SPEC.tmpdir;
 }
 
+multi sub INITIALIZE_DYNAMIC('$*REPO') {
+    PROCESS::<$REPO> := CompUnitRepo.new(@*INC[0]);
+}
+
 multi sub INITIALIZE_DYNAMIC('$*HOME') {
     my $HOME;
 
