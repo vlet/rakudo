@@ -6,43 +6,42 @@ my class X::Cannot::Empty { ... }
 my class X::Immutable { ... }
 my role Supply { ... }
 
-my sub combinations($n, $k) {
-    my @result;
-    my @stack;
+my sub combinations(\n, \k) {
+    return ((),) if k < 1;
 
-    return ((),) unless $k;
+    Seq.new(class :: does Iterator {
+        has int $!n;
+        has int $!k;
+        has Mu $!stack;
+        has Mu $!combination;
+        method BUILD(\n,\k) {
+            $!n = n;
+            $!k = k;
+            $!stack       := nqp::list(0);
+            $!combination := nqp::list();
+            self
+        }
+        method new(\n,\k) { nqp::create(self).BUILD(n,k) }
 
-    @stack.push(0);
-    gather while @stack {
-        my $index = @stack - 1;
-        my $value = @stack.pop;
+        method pull-one() {
+            my int $n = $!n;
+            my int $k = $!k;
 
-        while $value < $n {
-            @result[$index++] = $value++;
-            @stack.push($value);
-            if $index == $k {
-                my @copy = @result.clone;
-                take infix:<,>(|@copy);
-                # take @result.map(-> $x { $x }).list;
-                $value = $n;  # fake a last
+            while nqp::elems($!stack) {
+                my int $index = nqp::elems($!stack) - 1;
+                my int $value = nqp::pop($!stack);
+
+                while $value < $n && $index < $k {
+                    nqp::bindpos($!combination,$index,+$value);
+                    $index = $index + 1;
+                    $value = $value + 1;
+                    nqp::push($!stack,+$value);
+                }
+                return nqp::clone($!combination) if $index == $k;
             }
+            IterationEnd
         }
-    }
-}
-
-# XXX This next function is only checked in to help 
-#     debug a fairly insane bug.  It is not intended 
-#     to be a long term part of rakudo.
-sub very-broken-combinations($n, $k) {
-    my @result;
-    my $value = 1;
-
-    gather for 0..4 {
-        for 0..1 {
-            @result[$_] = $value++;
-        }
-        take @result;
-    }
+    }.new(n,k))
 }
 
 my sub permutations(Int $n) {

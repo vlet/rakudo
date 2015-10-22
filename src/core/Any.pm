@@ -482,13 +482,6 @@ multi sub item(\x)    { my $ = x }
 multi sub item(|c)    { my $ = c.list }
 multi sub item(Mu $a) { $a }
 
-sub RWPAIR(\k, \v) {   # internal fast pair creation
-    my \p := nqp::create(Pair);
-    nqp::bindattr(p, Pair, '$!key', k);
-    nqp::bindattr(p, Pair, '$!value', v);
-    p
-}
-
 sub SLICE_HUH(\SELF, @nogo, %d, %adv) {
     @nogo.unshift('delete')  # recover any :delete if necessary
       if @nogo && @nogo[0] ne 'delete' && %adv.EXISTS-KEY('delete');
@@ -518,12 +511,17 @@ sub DELETEKEY(Mu \d, str $key) {
     }
 } #DELETEKEY
 
-sub dd(|) {
-    my Mu $args := nqp::p6argvmarray();
-    if nqp::elems($args) {
-        while $args {
-            my $var  := nqp::shift($args);
+sub dd(**@p, *%n) {
+    if @p || %n {
+        for @p -> $var {
             my $name := $var.VAR.?name;
+            my $type := $var.WHAT.^name;
+            my $what := $var.?is-lazy
+              ?? $var[^10].perl.chop ~ "...Inf)"
+              !! $var.perl;
+            note $name ?? "$type $name = $what" !! $what;
+        }
+        for %n.kv -> $name, $var {
             my $type := $var.WHAT.^name;
             my $what := $var.?is-lazy
               ?? $var[^10].perl.chop ~ "...Inf)"
