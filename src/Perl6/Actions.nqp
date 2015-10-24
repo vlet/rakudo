@@ -5643,8 +5643,9 @@ Compilation unit '$file' contained the following violations:
             if $<OPER><sym> {
                 my $name;
                 if $past.isa(QAST::Op) && !$past.name {
-                    if $key eq 'LIST' { $key := 'infix'; }
-                    $name := nqp::lc($key) ~ ':' ~ $*W.canonicalize_opname($<OPER><sym>);
+                    my $k := $key;
+                    if $k eq 'LIST' { $k := 'infix'; }
+                    $name := nqp::lc($k) ~ ':' ~ $*W.canonicalize_opname($<OPER><sym>);
                     $past.name('&' ~ $name);
                 }
                 my $macro := find_macro_routine(['&' ~ $name]);
@@ -5660,6 +5661,7 @@ Compilation unit '$file' contained the following violations:
                 }
             }
         }
+        my $arity := 0;
         if $key eq 'POSTFIX' {
             # If may be an adverb.
             if $<colonpair> {
@@ -5690,13 +5692,17 @@ Compilation unit '$file' contained the following violations:
             }
         }
         else {
-            for $/.list { if $_.ast { $past.push($_.ast); } }
+            for $/.list { if $_.ast { $past.push($_.ast); ++$arity; } }
         }
         if $past.op eq 'xor' {
             $past.push(QAST::WVal.new( :named<false>, :value($*W.find_symbol(['Nil'])) ));
         }
-        if $key eq 'PREFIX' || $key eq 'INFIX' || $key eq 'POSTFIX' {
-            $past := self.whatever_curry($/, (my $orig := $past), $key eq 'INFIX' ?? 2 !! 1);
+#        if nqp::atkey(nqp::getenvhash,'RAKUDO_EXPR') {
+#            note("$key $sym");
+#            note($past.dump) if $past;
+#        }
+        if $key eq 'PREFIX' || $key eq 'INFIX' || $key eq 'POSTFIX' || ($key eq 'LIST' && $past.name ne '&infix:<,>' && $past.name ne '&infix:<:>') {
+            $past := self.whatever_curry($/, (my $orig := $past), $key eq 'LIST' ?? $arity !! $key eq 'INFIX' ?? 2 !! 1);
             if $return_map && $orig =:= $past {
                 $past := QAST::Op.new($past,
                     :op('hllize'), :returns($past.returns()));
@@ -5771,7 +5777,7 @@ Compilation unit '$file' contained the following violations:
     }
 
     sub check_smartmatch($/,$pat) {
-        if nqp::istype($pat,QAST::Op) && $pat.name eq '&infix:<=>' && $pat[1].name eq 'subst' {
+        if $pat.ann('is_S') {
             $/.CURSOR.worry("Smartmatch with S/// can never succeed because the subsequent string match will fail");
         }
     }
@@ -6963,7 +6969,7 @@ Compilation unit '$file' contained the following violations:
             QAST::IVal.new( :value($/[0] ?? 1 !! 0) ),       # samespace
         );
 
-        make QAST::Op.new( :op('locallifetime'), :node($/),
+        $past := QAST::Op.new( :op('locallifetime'), :node($/),
             QAST::Stmt.new(
 
                 # my $result;
@@ -7001,20 +7007,16 @@ Compilation unit '$file' contained the following violations:
                         )
                     ),
 
-                    ($<sym> eq 's' ??
-                        # $_ = $_!APPLY-MATCHES()
-                        QAST::Op.new( :op('call'), :name('&infix:<=>'),
-                            QAST::Var.new( :name('$_'), :scope('lexical') ),
-                            $apply_matches
-                        ) !!
-                        # $_!APPLY-MATCHES()
+                    QAST::Op.new( :op('call'), :name('&infix:<=>'),
+                        QAST::Var.new( :name($<sym> eq 's' ?? '$_' !! '$/'), :scope('lexical') ),
                         $apply_matches
                     )
+
                 ),
 
                 # It will return a list of matches when we match globally, and a single
                 # match otherwise.
-                (
+                $<sym> eq 's' ?? (
                     $global ??
                     QAST::Op.new( :op('p6store'),
                         QAST::Var.new( :name('$/'), :scope('lexical') ),
@@ -7043,14 +7045,14 @@ Compilation unit '$file' contained the following violations:
                             QAST::Var.new( :name('$/'), :scope('lexical') ) ),
                         QAST::Var.new( :name($result), :scope('local') )
                     )
-                ),
+                ) !! QAST::Stmt.new(),
 
                 # The result of this operation.
                 QAST::Var.new( :name('$/'), :scope('lexical') )
             ),
-            $result,
-            $global_result,
         );
+        $past.annotate('is_S', $<sym> eq 'S');
+        make $past;
     }
 
     method quote:sym<quasi>($/) {
@@ -8067,7 +8069,10 @@ Compilation unit '$file' contained the following violations:
 
         return $past unless $curried;
 
-        my int $i := 0;
+        my int $offset := 0;
+        $offset := nqp::elems($past) - $upto_arity if $past.op eq 'call' && !nqp::eqat($past.name,"&postcircumfix:",0);
+        my int $i := $offset;
+        my int $e := $upto_arity + $offset;
         my int $whatevers := 0;
         my int $hyperwhatever := 0;
 
@@ -8075,7 +8080,7 @@ Compilation unit '$file' contained the following violations:
         my $WhateverCode := $*W.find_symbol(['WhateverCode']);
         my $HyperWhatever := $*W.find_symbol(['HyperWhatever']);
 
-        while $i < $upto_arity {
+        while $i < $e {
             my $check := $past[$i];
             $check := $check[0] if (nqp::istype($check, QAST::Stmts) ||
                                     nqp::istype($check, QAST::Stmt)) &&
@@ -8098,7 +8103,7 @@ Compilation unit '$file' contained the following violations:
             my @old_args;
             my $block := QAST::Block.new(QAST::Stmts.new(), $past);
             $*W.cur_lexpad()[0].push($block);
-            while $i < $upto_arity {
+            while $i < $e {
                 my $old := $past[$i];
                 $old := $old[0] if (nqp::istype($old, QAST::Stmts) ||
                                     nqp::istype($old, QAST::Stmt)) &&
@@ -8175,6 +8180,7 @@ Compilation unit '$file' contained the following violations:
         }
         $past
     }
+
     sub remove_block($from, $block) {
         # Remove the QAST::Block $block from $from[0]; die if not found.
         my @decls := $from[0].list;
